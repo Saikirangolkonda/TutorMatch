@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Student Registration - TutorMatch</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #ffffff 0%, #ffffff 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 1rem 0;
+        }
+
+        .register-container {
+            background: white;
+            padding: 2.5rem;
+            border-radius: 15px;
+            box-shadow: 0 15px 35px rgba(0, 0, 0, 0.2);
+            width: 100%;
+            max-width: 450px;
+            transform: translateY(0);
+            transition: transform 0.3s ease;
+        }
+
+        .register-container:hover {
+            transform: translateY(-5px);
+        }
+
+        .logo {
+            text-align: center;
+            margin-bottom: 2rem;
+        }
+
+        .logo h1 {
+            color: #1DB954;
+            font-size: 2rem;
+            font-weight: 700;
+            margin-bottom: 0.5rem;
+        }
+
+        .logo p {
+            color: #333;
+            font-size: 0.9rem;
+        }
+
+        .welcome-message {
+            text-align: center;
+            margin-bottom: 2rem;
+            padding: 1rem;
+            background: rgba(29, 185, 84, 0.1);
+            border-radius: 8px;
+            border-left: 4px solid #1DB954;
+        }
+
+        .welcome-message h3 {
+            color: #000;
+            margin-bottom: 0.5rem;
+        }
+
+        .welcome-message p {
+            color: #333;
+            font-size: 0.9rem;
+        }
+
+        .form-group {
+            margin-bottom: 1.5rem;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 0.5rem;
+            color: #000;
+            font-weight: 500;
+        }
+
+        .form-group input {
+            width: 100%;
+            padding: 0.75rem;
+            border: 2px solid #e1e5e9;
+            border-radius: 8px;
+            font-size: 1rem;
+            transition: border-color 0.3s ease, box-shadow 0.3s ease;
+        }
+
+        .form-group input:focus {
+            outline: none;
+            border-color: #1DB954;
+            box-shadow: 0 0 0 3px rgba(29, 185, 84, 0.1);
+        }
+
+        .password-requirements {
+            font-size: 0.8rem;
+            color: #333;
+            margin-top: 0.25rem;
+        }
+
+        .register-btn {
+            width: 100%;
+            padding: 0.75rem;
+            background: #000;
+            color: #1DB954;
+            border: 2px solid #000;
+            border-radius: 8px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .register-btn:hover {
+            background: transparent;
+            color: #000;
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
+        }
+
+        .login-link {
+            text-align: center;
+            margin-top: 1.5rem;
+            padding-top: 1.5rem;
+            border-top: 1px solid #e1e5e9;
+        }
+
+        .login-link a {
+            color: #1DB954;
+            text-decoration: none;
+            font-weight: 500;
+            transition: color 0.3s ease;
+        }
+
+        .login-link a:hover {
+            color: #000;
+            text-decoration: underline;
+        }
+
+        .home-link {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: #000;
+            text-decoration: none;
+            font-weight: 500;
+            padding: 0.5rem 1rem;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 20px;
+            backdrop-filter: blur(10px);
+            transition: background 0.3s ease;
+        }
+
+        .home-link:hover {
+            background: rgba(255, 255, 255, 0.3);
+        }
+
+        .features {
+            background: #f8f9fa;
+            padding: 1.5rem;
+            border-radius: 8px;
+            margin-bottom: 2rem;
+        }
+
+        .features h4 {
+            color: #000;
+            margin-bottom: 1rem;
+            text-align: center;
+        }
+
+        .features ul {
+            list-style: none;
+            padding: 0;
+        }
+
+        .features li {
+            padding: 0.5rem 0;
+            color: #333;
+            font-size: 0.9rem;
+        }
+
+        .features li:before {
+            content: "✓";
+            color: #1DB954;
+            font-weight: bold;
+            margin-right: 0.5rem;
+        }
+
+        @media (max-width: 480px) {
+            .register-container {
+                margin: 1rem;
+                padding: 2rem;
+            }
+            
+            .home-link {
+                position: static;
+                display: inline-block;
+                margin-bottom: 1rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <a href="/" class="home-link">← Back to Home</a>
+    
+    <div class="register-container">
+        <div class="logo">
+            <h1>TutorMatch</h1>
+            <p>Student Registration</p>
+        </div>
+        
+        <div class="welcome-message">
+            <h3>Join TutorMatch Today!</h3>
+            <p>Create your account to connect with experienced tutors</p>
+        </div>
+
+        <div class="features">
+            <h4>What you'll get:</h4>
+            <ul>
+                <li>Access to qualified tutors in various subjects</li>
+                <li>Flexible scheduling for online and in-person sessions</li>
+                <li>Secure payment processing</li>
+                <li>Track your learning progress</li>
+                <li>24/7 customer support</li>
+            </ul>
+        </div>
+        
+        <form method="post" action="/register">
+            <div class="form-group">
+                <label for="name">Full Name</label>
+                <input type="text" id="name" name="name" required placeholder="Enter your full name">
+            </div>
+            
+            <div class="form-group">
+                <label for="email">Email Address</label>
+                <input type="email" id="email" name="email" required placeholder="Enter your email address">
+            </div>
+            
+            <div class="form-group">
+                <label for="password">Password</label>
+                <input type="password" id="password" name="password" required placeholder="Create a secure password">
+                <div class="password-requirements">
+                    Password should be at least 6 characters long
+                </div>
+            </div>
+            
+            <button type="submit" class="register-btn">Create Account</button>
+        </form>
+        
+        <div class="login-link">
+            <p>Already have an account? <a href="/login">Login here</a></p>
+        </div>
+    </div>
+
+    <script>
+        document.querySelector('form').addEventListener('submit', function(e) {
+            const password = document.getElementById('password').value;
+            const name = document.getElementById('name').value;
+            
+            if (password.length < 6) {
+                e.preventDefault();
+                alert('Password must be at least 6 characters long');
+                return false;
+            }
+            
+            if (name.trim().length < 2) {
+                e.preventDefault();
+                alert('Please enter your full name');
+                return false;
+            }
+        });
+
+        const inputs = document.querySelectorAll('input');
+        inputs.forEach(input => {
+            input.addEventListener('focus', function() {
+                this.parentElement.style.transform = 'scale(1.02)';
+            });
+            
+            input.addEventListener('blur', function() {
+                this.parentElement.style.transform = 'scale(1)';
+            });
+        });
+    </script>
+</body>
+</html>

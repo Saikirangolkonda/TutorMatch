@@ -1,0 +1,489 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TutorMatch - Find Your Perfect Tutor</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', sans-serif; background: #ffffff; }
+
+        .header { background: linear-gradient(135deg, #15c249 0%, #15bf42 100%); color: rgb(255, 255, 255); padding: 1rem 0; }
+        .nav { display: flex; justify-content: space-between; align-items: center; max-width: 1200px; margin: 0 auto; padding: 0 20px; }
+        .logo { font-size: 1.8rem; font-weight: bold; }
+        .nav-links a { color: white; text-decoration: none; margin-left: 20px; opacity: 0.9; transition: opacity 0.3s; }
+        .nav-links a:hover { opacity: 1; }
+        
+        .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+        .search-header { text-align: center; margin-bottom: 40px; }
+        .search-header h1 { color: #2c3e50; margin-bottom: 10px; font-size: 2.5rem; }
+        
+        .search-layout { display: grid; grid-template-columns: 280px 1fr; gap: 30px; }
+        
+        .filters { background: white; padding: 20px; border-radius: 15px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); height: fit-content; }
+        .filters h3 { color: #2c3e50; margin-bottom: 20px; font-size: 1.2rem; }
+        .filter-group { margin-bottom: 20px; }
+        .filter-group label { display: block; margin-bottom: 8px; color: #555; font-weight: 600; }
+        .filter-group select, .filter-group input { width: 100%; padding: 10px; border: 2px solid #e1e8ed; border-radius: 8px; font-size: 14px; }
+        .filter-group select:focus, .filter-group input:focus { outline: none; border-color: #667eea; }
+        
+        .results { background: white; padding: 25px; border-radius: 15px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); }
+        .results-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 25px; }
+        .results-header h3 { color: #16301b; }
+        
+        .tutor-grid { display: grid; gap: 20px; }
+        .tutor-card { border: 2px solid #e4e4d7; border-radius: 15px; padding: 20px; transition: all 0.3s ease; cursor: pointer; }
+        .tutor-card:hover { border-color: #289a16; transform: translateY(-2px); box-shadow: 0 8px 25px rgba(102, 126, 234, 0.15); }
+        
+        .tutor-header { display: flex; align-items: center; gap: 15px; margin-bottom: 15px; }
+        .tutor-avatar { width: 60px; height: 60px; border-radius: 50%; background: linear-gradient(135deg, #15c249, #15c249); display: flex; align-items: center; justify-content: center; color: white; font-size: 1.2rem; font-weight: bold; }
+        .tutor-basic h4 { color: #2c3e50; margin-bottom: 5px; font-size: 1.1rem; }
+        .rating { color: #f39c12; font-size: 0.9rem; }
+        
+        .tutor-details p { color: #666; font-size: 0.95rem; margin-bottom: 10px; line-height: 1.4; }
+        .subjects { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 15px; }
+        .subject-tag { background: linear-gradient(135deg, #e8f4fd, #f0f8ff); color: #2c3e50; padding: 4px 10px; border-radius: 12px; font-size: 0.8rem; font-weight: 500; }
+        
+        .tutor-footer { display: flex; justify-content: space-between; align-items: center; }
+        .price { font-size: 1.1rem; font-weight: bold; color: #27ae60; }
+        .btn { padding: 8px 16px; background: linear-gradient(135deg, #21ce33, #1bdc55); color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 0.9rem; transition: transform 0.2s; }
+        .btn:hover { transform: scale(1.05); }
+        
+        .profile-modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; }
+        .profile-content { background: white; margin: 50px auto; padding: 30px; border-radius: 15px; max-width: 800px; max-height: 90vh; overflow-y: auto; position: relative; }
+        .close-btn { position: absolute; top: 15px; right: 20px; font-size: 24px; cursor: pointer; color: #666; }
+        
+        .profile-header { display: flex; align-items: center; gap: 20px; margin-bottom: 25px; padding-bottom: 20px; border-bottom: 2px solid #f1f3f4; }
+        .profile-avatar { width: 100px; height: 100px; font-size: 2rem; }
+        .profile-info h2 { color: #2c3e50; margin-bottom: 8px; }
+        .profile-actions { margin-top: 15px; }
+        .profile-actions .btn { margin-right: 10px; }
+        
+        .profile-section { margin-bottom: 25px; }
+        .profile-section h3 { color: #2c3e50; margin-bottom: 15px; font-size: 1.1rem; }
+        .profile-section p, .profile-section li { color: #666; line-height: 1.6; }
+        
+        .stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin: 20px 0; }
+        .stat-item { text-align: center; padding: 15px; background: #f8f9fa; border-radius: 10px; }
+        .stat-number { font-size: 1.5rem; font-weight: bold; color: #14ad38; }
+        .stat-label { font-size: 0.8rem; color: #666; }
+        
+        .review-item { padding: 15px; border: 1px solid #f1f3f4; border-radius: 10px; margin-bottom: 15px; }
+        .review-header { display: flex; justify-content: space-between; margin-bottom: 8px; }
+        
+        @media (max-width: 768px) {
+            .search-layout { grid-template-columns: 1fr; }
+            .filters { margin-bottom: 20px; }
+            .tutor-header { flex-direction: column; text-align: center; }
+            .tutor-footer { flex-direction: column; gap: 10px; }
+            .stats-grid { grid-template-columns: repeat(2, 1fr); }
+        }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <nav class="nav">
+            <div class="logo">TutorMatch</div>
+            <div class="nav-links">
+                <a href="/student-dashboard">Dashboard</a>
+                <!-- <a href="">Logout</a> -->
+            </div>
+        </nav>
+    </header>
+
+    <div class="container">
+        <div class="search-header">
+            <h1>Find Your Perfect Tutor</h1>
+            <p style="color: #666; font-size: 1.1rem;">Connect with expert tutors for personalized learning</p>
+        </div>
+        
+        <div class="search-layout">
+            <div class="filters">
+                <h3>🔍 Filter Tutors</h3>
+                
+                <div class="filter-group">
+                    <label>Subject:</label>
+                    <select id="subjectFilter">
+                        <option value="">All Subjects</option>
+                        <option value="Mathematics">Mathematics</option>
+                        <option value="Physics">Physics</option>
+                        <option value="Chemistry">Chemistry</option>
+                        <option value="English">English</option>
+                        <option value="Computer Science">Computer Science</option>
+                        <option value="Biology">Biology</option>
+                        <option value="History">History</option>
+                    </select>
+                </div>
+
+                <div class="filter-group">
+                    <label>Rating:</label>
+                    <select id="ratingFilter">
+                        <option value="">All Ratings</option>
+                        <option value="5">5 Stars</option>
+                        <option value="4">4+ Stars</option>
+                        <option value="3">3+ Stars</option>
+                    </select>
+                </div>
+
+                <div class="filter-group">
+                    <label>Max Price: $<span id="priceValue">50</span>/hour</label>
+                    <input type="range" min="15" max="100" value="50" id="priceRange">
+                </div>
+
+                <button class="btn" onclick="applyFilters()" style="width: 100%; margin-top: 10px;">Apply Filters</button>
+            </div>
+
+            <div class="results">
+                <div class="results-header">
+                    <h3>Available Tutors (<span id="tutorCount">15</span> found)</h3>
+                    <select id="sortBy" onchange="sortTutors()">
+                        <option>Sort by Rating</option>
+                        <option>Sort by Price (Low to High)</option>
+                        <option>Sort by Price (High to Low)</option>
+                    </select>
+                </div>
+
+                <div class="tutor-grid" id="tutorGrid">
+                    <!-- Tutors will be populated by JavaScript -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Profile Modal -->
+    <div class="profile-modal" id="profileModal">
+        <div class="profile-content" id="profileContent">
+            <span class="close-btn" onclick="closeProfile()">&times;</span>
+            <!-- Profile content will be populated by JavaScript -->
+        </div>
+    </div>
+
+    <script>
+        const tutors = [
+            {
+                id: 1, name: "Dr. Sarah Chen", avatar: "SC", rating: 4.9, reviews: 234, price: 45,
+                subjects: ["Mathematics", "Physics", "Statistics"], 
+                description: "PhD in Applied Mathematics from MIT. 8 years of tutoring experience with focus on calculus and linear algebra.",
+                education: "PhD Applied Mathematics - MIT (2016)", experience: "8 years",
+                bio: "I'm passionate about making complex mathematical concepts accessible to students of all levels. My approach combines theoretical understanding with practical problem-solving techniques.",
+                achievements: ["Published 15+ research papers", "Former MIT Teaching Assistant", "Mathematics Olympiad Coach"],
+                languages: ["English", "Mandarin", "Spanish"], responseTime: "Within 1 hour",
+                totalHours: 800, successRate: 96
+            },
+            {
+                id: 2, name: "Prof. Michael Rodriguez", avatar: "MR", rating: 4.8, reviews: 189, price: 40,
+                subjects: ["Chemistry", "Biology", "Physics"],
+                description: "Chemistry professor with 12 years of teaching experience. Specializes in organic chemistry and biochemistry.",
+                education: "PhD Chemistry - Stanford University (2012)", experience: "12 years",
+                bio: "I believe chemistry is everywhere around us! My goal is to help students see the fascinating connections between chemical principles and everyday life.",
+                achievements: ["Chemistry Department Excellence Award", "Published author", "Research in Green Chemistry"],
+                languages: ["English", "Spanish"], responseTime: "Within 2 hours",
+                totalHours: 1200, successRate: 94
+            },
+            {
+                id: 3, name: "Emma Thompson", avatar: "ET", rating: 4.7, reviews: 156, price: 35,
+                subjects: ["English", "Literature", "Writing"],
+                description: "English Literature graduate with creative writing background. Helps students excel in essays and language skills.",
+                education: "MA English Literature - Oxford University (2018)", experience: "6 years",
+                bio: "Words have power! I help students unlock their writing potential and develop critical thinking skills through literature analysis.",
+                achievements: ["Published novelist", "Writing workshop facilitator", "Academic writing specialist"],
+                languages: ["English", "French"], responseTime: "Within 3 hours",
+                totalHours: 650, successRate: 92
+            },
+            {
+                id: 4, name: "Alex Kim", avatar: "AK", rating: 4.9, reviews: 278, price: 50,
+                subjects: ["Computer Science", "Programming", "Mathematics"],
+                description: "Software engineer turned educator. Expert in Python, Java, and data structures with industry experience.",
+                education: "MS Computer Science - Carnegie Mellon (2017)", experience: "7 years",
+                bio: "Programming is problem-solving! I combine my industry experience with teaching to help students master both theory and practical coding skills.",
+                achievements: ["Former Google engineer", "Open source contributor", "Coding bootcamp instructor"],
+                languages: ["English", "Korean"], responseTime: "Within 1 hour",
+                totalHours: 900, successRate: 98
+            },
+            {
+                id: 5, name: "Dr. Lisa Johnson", avatar: "LJ", rating: 4.6, reviews: 143, price: 38,
+                subjects: ["Biology", "Chemistry", "Physics"],
+                description: "Medical school professor with expertise in human biology and pre-med preparation courses.",
+                education: "MD & PhD - Johns Hopkins University (2015)", experience: "9 years",
+                bio: "Science is about understanding life itself. I help pre-med students and biology enthusiasts grasp complex biological processes.",
+                achievements: ["Medical school faculty", "Research in genetics", "MCAT prep specialist"],
+                languages: ["English"], responseTime: "Within 4 hours",
+                totalHours: 720, successRate: 95
+            },
+            {
+                id: 6, name: "James Wilson", avatar: "JW", rating: 4.8, reviews: 201, price: 42,
+                subjects: ["Physics", "Mathematics", "Engineering"],
+                description: "Mechanical engineer with PhD in Physics. Specializes in mechanics, thermodynamics, and applied mathematics.",
+                education: "PhD Physics - Caltech (2014)", experience: "10 years",
+                bio: "Physics explains how our universe works! I make abstract concepts concrete through real-world applications and engineering examples.",
+                achievements: ["Aerospace industry experience", "Patent holder", "Physics competition judge"],
+                languages: ["English", "German"], responseTime: "Within 2 hours",
+                totalHours: 1100, successRate: 97
+            },
+            {
+                id: 7, name: "Maria Garcia", avatar: "MG", rating: 4.7, reviews: 167, price: 32,
+                subjects: ["Spanish", "English", "History"],
+                description: "Bilingual educator with expertise in language learning and Latin American history.",
+                education: "MA Hispanic Studies - UC Berkeley (2019)", experience: "5 years",
+                bio: "¡Hola! Language opens doors to new cultures. I make Spanish learning enjoyable through cultural immersion and practical conversation.",
+                achievements: ["Fulbright Scholar", "Cultural exchange coordinator", "Language immersion specialist"],
+                languages: ["Spanish", "English", "Portuguese"], responseTime: "Within 2 hours",
+                totalHours: 580, successRate: 91
+            },
+            {
+                id: 8, name: "Dr. Robert Zhang", avatar: "RZ", rating: 4.9, reviews: 312, price: 48,
+                subjects: ["Mathematics", "Statistics", "Economics"],
+                description: "Economics professor with strong mathematical background. Expert in statistics, econometrics, and data analysis.",
+                education: "PhD Economics - Harvard University (2013)", experience: "11 years",
+                bio: "Mathematics is the language of economics! I help students understand how mathematical models explain economic phenomena.",
+                achievements: ["Economic research publications", "Data science consultant", "Financial modeling expert"],
+                languages: ["English", "Mandarin"], responseTime: "Within 1 hour",
+                totalHours: 1350, successRate: 96
+            },
+            {
+                id: 9, name: "Jennifer Adams", avatar: "JA", rating: 4.5, reviews: 124, price: 28,
+                subjects: ["History", "Social Studies", "English"],
+                description: "History teacher with passion for making the past come alive. Specializes in American and World History.",
+                education: "MA History - Yale University (2020)", experience: "4 years",
+                bio: "History isn't just dates and names – it's the story of humanity! I help students connect past events to present understanding.",
+                achievements: ["Historical society member", "Museum education coordinator", "History curriculum developer"],
+                languages: ["English"], responseTime: "Within 3 hours",
+                totalHours: 420, successRate: 89
+            },
+            {
+                id: 10, name: "David Park", avatar: "DP", rating: 4.8, reviews: 198, price: 44,
+                subjects: ["Computer Science", "Mathematics", "Physics"],
+                description: "PhD in Computer Science with research focus on AI and machine learning. Former tech industry researcher.",
+                education: "PhD Computer Science - MIT (2016)", experience: "8 years",
+                bio: "AI is transforming our world! I help students understand the mathematical foundations behind machine learning and modern computing.",
+                achievements: ["AI research publications", "Former Meta researcher", "Tech conference speaker"],
+                languages: ["English", "Korean"], responseTime: "Within 1 hour",
+                totalHours: 850, successRate: 95
+            },
+            {
+                id: 11, name: "Dr. Rachel Green", avatar: "RG", rating: 4.6, reviews: 141, price: 36,
+                subjects: ["Biology", "Environmental Science", "Chemistry"],
+                description: "Environmental scientist with focus on ecology and conservation biology. Passionate about sustainability education.",
+                education: "PhD Environmental Science - UC Davis (2017)", experience: "7 years",
+                bio: "Our planet needs informed citizens! I help students understand ecological principles and environmental challenges facing our world.",
+                achievements: ["Environmental research grants", "Conservation project leader", "Science communication award"],
+                languages: ["English", "French"], responseTime: "Within 2 hours",
+                totalHours: 680, successRate: 93
+            },
+            {
+                id: 12, name: "Thomas Brown", avatar: "TB", rating: 4.7, reviews: 176, price: 39,
+                subjects: ["English", "Philosophy", "Critical Thinking"],
+                description: "Philosophy professor with expertise in logic, ethics, and critical thinking. Helps students develop analytical skills.",
+                education: "PhD Philosophy - Princeton University (2015)", experience: "9 years",
+                bio: "Philosophy teaches us how to think clearly! I guide students through complex arguments and help them develop their own critical thinking abilities.",
+                achievements: ["Philosophy journal publications", "Ethics committee member", "Logic competition organizer"],
+                languages: ["English", "Latin"], responseTime: "Within 3 hours",
+                totalHours: 780, successRate: 94
+            },
+            {
+                id: 13, name: "Dr. Priya Patel", avatar: "PP", rating: 4.9, reviews: 267, price: 46,
+                subjects: ["Mathematics", "Computer Science", "Statistics"],
+                description: "Data scientist with PhD in Statistics. Specializes in machine learning, data analysis, and mathematical modeling.",
+                education: "PhD Statistics - Stanford University (2018)", experience: "6 years",
+                bio: "Data tells stories! I help students discover the power of statistics and data science in solving real-world problems.",
+                achievements: ["Data science publications", "Industry consulting", "Kaggle competition winner"],
+                languages: ["English", "Hindi", "Gujarati"], responseTime: "Within 1 hour",
+                totalHours: 720, successRate: 97
+            },
+            {
+                id: 14, name: "Mark Davis", avatar: "MD", rating: 4.5, reviews: 133, price: 33,
+                subjects: ["Music", "Music Theory", "Piano"],
+                description: "Professional musician and music educator. Specializes in piano, music theory, and composition.",
+                education: "MM Music Performance - Juilliard School (2019)", experience: "5 years",
+                bio: "Music is a universal language! I help students develop musical skills while fostering creativity and artistic expression.",
+                achievements: ["Concert performances", "Music composition awards", "Youth orchestra conductor"],
+                languages: ["English"], responseTime: "Within 4 hours",
+                totalHours: 520, successRate: 90
+            },
+            {
+                id: 15, name: "Dr. Amanda Lee", avatar: "AL", rating: 4.8, reviews: 219, price: 41,
+                subjects: ["Psychology", "Statistics", "Research Methods"],
+                description: "Clinical psychologist with research background. Helps students understand human behavior and research methodology.",
+                education: "PhD Clinical Psychology - UCLA (2016)", experience: "8 years",
+                bio: "Understanding the mind is fascinating! I help students explore psychological principles and develop research skills.",
+                achievements: ["Licensed clinical psychologist", "Research publications", "Mental health advocate"],
+                languages: ["English", "Korean"], responseTime: "Within 2 hours",
+                totalHours: 890, successRate: 95
+            }
+        ];
+
+        let filteredTutors = [...tutors];
+
+        function renderTutors(tutorList) {
+            const grid = document.getElementById('tutorGrid');
+            grid.innerHTML = tutorList.map(tutor => `
+                <div class="tutor-card" onclick="openProfile(${tutor.id})">
+                    <div class="tutor-header">
+                        <div class="tutor-avatar">${tutor.avatar}</div>
+                        <div class="tutor-basic">
+                            <h4>${tutor.name}</h4>
+                            <div class="rating">${'★'.repeat(Math.floor(tutor.rating))}${tutor.rating % 1 ? '☆' : ''} (${tutor.rating}) • ${tutor.reviews} reviews</div>
+                        </div>
+                    </div>
+                    <div class="tutor-details">
+                        <p>${tutor.description}</p>
+                        <div class="subjects">
+                            ${tutor.subjects.map(subject => `<span class="subject-tag">${subject}</span>`).join('')}
+                        </div>
+                    </div>
+                    <div class="tutor-footer">
+                        <div class="price">$${tutor.price}/hour</div>
+                        <button class="btn" onclick="event.stopPropagation(); bookSession(${tutor.id})">Book Session</button>
+                    </div>
+                </div>
+            `).join('');
+            
+            document.getElementById('tutorCount').textContent = tutorList.length;
+        }
+
+        function openProfile(tutorId) {
+            const tutor = tutors.find(t => t.id === tutorId);
+            const modal = document.getElementById('profileModal');
+            const content = document.getElementById('profileContent');
+            
+            content.innerHTML = `
+                <span class="close-btn" onclick="closeProfile()">&times;</span>
+                <div class="profile-header">
+                    <div class="tutor-avatar profile-avatar">${tutor.avatar}</div>
+                    <div class="profile-info">
+                        <h2>${tutor.name}</h2>
+                        <div class="rating" style="font-size: 1.1rem;">${'★'.repeat(Math.floor(tutor.rating))}${tutor.rating % 1 ? '☆' : ''} (${tutor.rating}) • ${tutor.reviews} reviews</div>
+                        <p style="color: #666; margin-top: 8px;">${tutor.description}</p>
+                        <div class="subjects" style="margin-top: 15px;">
+                            ${tutor.subjects.map(subject => `<span class="subject-tag">${subject}</span>`).join('')}
+                        </div>
+                        <div class="profile-actions">
+                            <button class="btn" onclick="bookSession(${tutor.id})">Book Session - $${tutor.price}/hour</button>
+                            <button class="btn" style="background: #95a5a6;" onclick="sendMessage(${tutor.id})">Send Message</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="stats-grid">
+                    <div class="stat-item">
+                        <div class="stat-number">${tutor.reviews}</div>
+                        <div class="stat-label">Reviews</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-number">${tutor.rating}</div>
+                        <div class="stat-label">Rating</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-number">${tutor.totalHours}+</div>
+                        <div class="stat-label">Hours Taught</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-number">${tutor.successRate}%</div>
+                        <div class="stat-label">Success Rate</div>
+                    </div>
+                </div>
+
+                <div class="profile-section">
+                    <h3>📋 About</h3>
+                    <p>${tutor.bio}</p>
+                </div>
+
+                <div class="profile-section">
+                    <h3>🎓 Education & Experience</h3>
+                    <p><strong>Education:</strong> ${tutor.education}</p>
+                    <p><strong>Teaching Experience:</strong> ${tutor.experience}</p>
+                    <p><strong>Languages:</strong> ${tutor.languages.join(', ')}</p>
+                    <p><strong>Response Time:</strong> ${tutor.responseTime}</p>
+                </div>
+
+                <div class="profile-section">
+                    <h3>🏆 Achievements</h3>
+                    <ul style="margin-left: 20px;">
+                        ${tutor.achievements.map(achievement => `<li>${achievement}</li>`).join('')}
+                    </ul>
+                </div>
+
+                <div class="profile-section">
+                    <h3>⭐ Recent Reviews</h3>
+                    <div class="review-item">
+                        <div class="review-header">
+                            <strong>Student A</strong>
+                            <div class="rating">★★★★★</div>
+                        </div>
+                        <p>"Excellent tutor! Really helped me understand complex concepts. Highly recommend!"</p>
+                    </div>
+                    <div class="review-item">
+                        <div class="review-header">
+                            <strong>Student B</strong>
+                            <div class="rating">★★★★☆</div>
+                        </div>
+                        <p>"Very knowledgeable and patient. Great teaching style and always available to help."</p>
+                    </div>
+                </div>
+            `;
+            
+            modal.style.display = 'block';
+        }
+
+        function closeProfile() {
+            document.getElementById('profileModal').style.display = 'none';
+        }
+
+        function bookSession(tutorId) {
+            const tutor = tutors.find(t => t.id === tutorId);
+            alert(`Booking session with ${tutor.name} at $${tutor.price}/hour. Redirecting to booking page...`);
+            window.location.href = `/book-session/${tutorId}`;
+        }
+
+        function sendMessage(tutorId) {
+            const tutor = tutors.find(t => t.id === tutorId);
+            alert(`Opening message interface with ${tutor.name}...`);
+        }
+
+        function applyFilters() {
+            const subject = document.getElementById('subjectFilter').value;
+            const rating = document.getElementById('ratingFilter').value;
+            const maxPrice = document.getElementById('priceRange').value;
+
+            filteredTutors = tutors.filter(tutor => {
+                const subjectMatch = !subject || tutor.subjects.includes(subject);
+                const ratingMatch = !rating || tutor.rating >= parseFloat(rating);
+                const priceMatch = tutor.price <= parseInt(maxPrice);
+                return subjectMatch && ratingMatch && priceMatch;
+            });
+
+            renderTutors(filteredTutors);
+        }
+
+        function sortTutors() {
+            const sortBy = document.getElementById('sortBy').value;
+            
+            if (sortBy.includes('Price (Low to High)')) {
+                filteredTutors.sort((a, b) => a.price - b.price);
+            } else if (sortBy.includes('Price (High to Low)')) {
+                filteredTutors.sort((a, b) => b.price - a.price);
+            } else {
+                filteredTutors.sort((a, b) => b.rating - a.rating);
+            }
+            
+            renderTutors(filteredTutors);
+        }
+
+        // Price range slider
+        document.getElementById('priceRange').addEventListener('input', function() {
+            document.getElementById('priceValue').textContent = this.value;
+        });
+
+        // Close modal when clicking outside
+        window.onclick = function(event) {
+            const modal = document.getElementById('profileModal');
+            if (event.target === modal) {
+                closeProfile();
+            }
+        }
+
+        // Initialize
+        renderTutors(tutors);
+    </script>
+</body>
+</html>

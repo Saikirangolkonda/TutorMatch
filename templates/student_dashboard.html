@@ -1,0 +1,629 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TutorMatch Dashboard</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        :root {
+            --primary: #1DB954;
+            --bg: #ffffff;
+            --card: #d8fdcd;
+            --text: #000000;
+            --gray: #090909;
+            --border: rgba(255,255,255,0.1);
+        }
+        
+        body {
+            font-family: system-ui, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            display: flex;
+            height: 100vh;
+        }
+        
+        .sidebar {
+            width: 250px;
+            background: var(--card);
+            padding: 2rem 0;
+            border-right: 1px solid var(--border);
+        }
+        
+        .logo {
+            padding: 0 2rem 2rem;
+            font-size: 1.5rem;
+            font-weight: bold;
+            color: var(--primary);
+            border-bottom: 1px solid var(--border);
+            margin-bottom: 2rem;
+        }
+        
+        .nav-item {
+            padding: 1rem 2rem;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+        
+        .nav-item:hover, .nav-item.active {
+            background: rgba(16, 100, 3, 0.1);
+            border-right: 3px solid var(--primary);
+        }
+        
+        .main {
+            flex: 1;
+            padding: 2rem;
+            overflow-y: auto;
+        }
+        
+        .header {
+            margin-bottom: 2rem;
+        }
+        
+        .header h1 {
+            font-size: 2rem;
+            margin-bottom: 0.5rem;
+        }
+        
+        .content {
+            display: none;
+        }
+        
+        .content.active {
+            display: block;
+        }
+        
+        .cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 1.5rem;
+        }
+        
+        .card {
+            background: var(--card);
+            padding: 1.5rem;
+            border-radius: 12px;
+            border: 1px solid var(--border);
+        }
+        
+        .card h3 {
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        
+        .btn {
+            background: var(--primary);
+            color: black;
+            padding: 0.75rem 1.5rem;
+            border: none;
+            border-radius: 25px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s;
+            text-decoration: none;
+            display: inline-block;
+            text-align: center;
+        }
+        
+        .btn:hover {
+            transform: scale(1.05);
+        }
+        
+        .btn-large {
+            padding: 1rem 2rem;
+            font-size: 1.1rem;
+            border-radius: 30px;
+        }
+        
+        .btn-secondary {
+            background: transparent;
+            color: var(--primary);
+            border: 1px solid var(--primary);
+        }
+        
+        .btn-secondary:hover {
+            background: var(--primary);
+            color: black;
+        }
+        
+        .item {
+            background: rgba(255,255,255,0.05);
+            padding: 1rem;
+            border-radius: 8px;
+            margin-bottom: 1rem;
+            border-left: 4px solid var(--primary);
+        }
+        
+        .status {
+            padding: 0.25rem 0.75rem;
+            border-radius: 15px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        
+        .status-confirmed { background: rgba(29, 185, 84, 0.2); color: var(--primary); }
+        .status-pending { background: rgba(255, 193, 7, 0.2); color: #ffc107; }
+        .status-completed { background: rgba(108, 117, 125, 0.2); color: #6c757d; }
+        
+        .empty {
+            text-align: center;
+            color: var(--gray);
+            padding: 3rem;
+        }
+        
+        .loading {
+            text-align: center;
+            color: var(--gray);
+            padding: 2rem;
+        }
+        
+        .dashboard-overview {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+        
+        .hero-card {
+            background: linear-gradient(135deg, var(--primary), #1ed760);
+            color: black;
+            padding: 2rem;
+            border-radius: 16px;
+            text-align: center;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .hero-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle cx="20" cy="20" r="2" fill="rgba(255,255,255,0.1)"/><circle cx="80" cy="40" r="1.5" fill="rgba(255,255,255,0.1)"/><circle cx="40" cy="80" r="1" fill="rgba(255,255,255,0.1)"/></svg>') repeat;
+            pointer-events: none;
+        }
+        
+        .hero-card h2 {
+            font-size: 1.5rem;
+            margin-bottom: 1rem;
+            position: relative;
+            z-index: 1;
+        }
+        
+        .hero-card p {
+            margin-bottom: 2rem;
+            opacity: 0.8;
+            position: relative;
+            z-index: 1;
+        }
+        
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+        }
+        
+        .stat-item {
+            text-align: center;
+            padding: 1rem;
+            background: rgba(255,255,255,0.05);
+            border-radius: 8px;
+        }
+        
+        .stat-number {
+            font-size: 1.5rem;
+            font-weight: bold;
+            color: var(--primary);
+        }
+        
+        .stat-label {
+            font-size: 0.8rem;
+            color: var(--gray);
+            margin-top: 0.25rem;
+        }
+        
+        @media (max-width: 768px) {
+            body { flex-direction: column; }
+            .sidebar { width: 100%; height: auto; }
+            .main { padding: 1rem; }
+            .dashboard-overview { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <nav class="sidebar">
+        <div class="logo">TutorMatch</div>
+        <div class="nav-item active" data-section="dashboard">
+            <span>🏠</span> Dashboard
+        </div>
+        <div class="nav-item" data-section="sessions">
+            <span>📅</span> Upcoming Sessions
+        </div>
+        <div class="nav-item" data-section="payments">
+            <span>💳</span> Payment History
+        </div>
+        <div class="nav-item" data-section="notifications">
+            <span>🔔</span> Notifications
+        </div>
+        <!-- <div class="nav-item" data-section="profile">
+            <span>👤</span> Profile Settings
+        </div> -->
+    </nav>
+
+    <main class="main">
+        </head>
+<header style="display: flex; justify-content: flex-end; align-items: center; margin-bottom: 2rem;">
+    <a href="/" class="home-link" style="text-decoration: none; color: var(--primary); font-weight: 600; font-size: 1rem;">← Back to Home</a>
+</header>
+
+<!-- Dashboard Overview -->
+<div class="content active" id="dashboard">
+    <div class="dashboard-overview">
+        <div class="hero-card">
+            <h2>Ready to Learn?</h2>
+            <p>Find the perfect tutor for your academic goals</p>
+            <a href="/tutor-search" class="btn btn-large" style="background: rgba(0,0,0,0.2); color: white; border: 2px solid white;">
+                🎯 Find Tutors
+            </a>
+        </div>
+        
+        <div class="card">
+            <h3>📊 Your Stats</h3>
+            <div class="stats-grid">
+                <div class="stat-item">
+                    <div class="stat-number" id="totalSessions">0</div>
+                    <div class="stat-label">Total Sessions</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-number" id="hoursLearned">0</div>
+                    <div class="stat-label">Hours Learned</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-number" id="activeTutors">0</div>
+                    <div class="stat-label">Active Tutors</div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="cards">
+        <div class="card">
+            <h3>📅 Next Session</h3>
+            <div id="nextSession" class="loading">Loading...</div>
+        </div>
+        
+        <div class="card">
+            <h3>🔔 Recent Activity</h3>
+            <div id="recentActivity" class="loading">Loading...</div>
+        </div>
+        
+        <div class="card">
+            <h3>💡 Quick Actions</h3>
+            <div style="display: flex; flex-direction: column; gap: 1rem;">
+                <button class="btn btn-secondary" onclick="switchTo('sessions')">View All Sessions</button>
+                <button class="btn btn-secondary" onclick="switchTo('payments')">Payment History</button>
+                <button class="btn btn-secondary" onclick="switchTo('profile')">Update Profile</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Upcoming Sessions -->
+<div class="content" id="sessions">
+    <div class="card">
+        <h3>📅 Your Upcoming Sessions</h3>
+        <div id="sessionsList" class="loading">Loading sessions...</div>
+    </div>
+</div>
+
+<!-- Payment History -->
+<div class="content" id="payments">
+    <div class="card">
+        <h3>💳 Payment History</h3>
+        <div id="paymentsList" class="loading">Loading payments...</div>
+    </div>
+</div>
+
+<!-- Notifications -->
+<div class="content" id="notifications">
+    <div class="card">
+        <h3>🔔 Recent Updates</h3>
+        <div id="notificationsList" class="loading">Loading notifications...</div>
+    </div>
+</div>
+
+<!-- Profile Settings -->
+<div class="content" id="profile">
+    <div class="card">
+        <h3>👤 Profile Settings</h3>
+        <div id="profileContent" class="loading">Loading profile...</div>
+    </div>
+</div>
+<script>
+    let dashboardData = null;
+
+    // Navigation
+    document.querySelectorAll('.nav-item').forEach(item => {
+        item.addEventListener('click', () => {
+            document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+            document.querySelectorAll('.content').forEach(c => c.classList.remove('active'));
+            
+            item.classList.add('active');
+            document.getElementById(item.dataset.section).classList.add('active');
+            
+            // Update page title
+            const sectionTitles = {
+                'dashboard': 'Dashboard',
+                'sessions': 'Upcoming Sessions',
+                'payments': 'Payment History',
+                'notifications': 'Notifications',
+                'profile': 'Profile Settings'
+            };
+            // document.getElementById('pageTitle').textContent = sectionTitles[item.dataset.section];
+        });
+    });
+
+    // Load data on page load
+    document.addEventListener('DOMContentLoaded', loadData);
+
+    async function loadData() {
+        try {
+            // Load student data
+            const response = await fetch('/api/student-data?student_email=student@email.com');
+            if (response.ok) {
+                dashboardData = await response.json();
+            } else {
+                // Fallback to mock data if API not available
+                dashboardData = {
+                    bookings: [
+                        {
+                            id: 'booking1',
+                            tutor_name: 'John Smith',
+                            subject: 'Mathematics',
+                            date: '2025-06-30',
+                            time: '14:00',
+                            status: 'confirmed'
+                        },
+                        {
+                            id: 'booking2',
+                            tutor_name: 'Sarah Johnson',
+                            subject: 'English',
+                            date: '2025-07-02',
+                            time: '16:00',
+                            status: 'pending'
+                        }
+                    ],
+                    payments: [
+                        {
+                            id: 'payment1',
+                            tutor_name: 'John Smith',
+                            amount: 30.00,
+                            date: '2025-06-25',
+                            method: 'Credit Card',
+                            status: 'completed'
+                        }
+                    ],
+                    notifications: [
+                        {
+                            id: 'notif1',
+                            title: 'Session Confirmed',
+                            message: 'Your session with John Smith has been confirmed for tomorrow at 2:00 PM',
+                            date: '2025-06-29'
+                        },
+                        {
+                            id: 'notif2',
+                            title: 'Payment Processed',
+                            message: 'Payment of $30.00 has been successfully processed',
+                            date: '2025-06-25'
+                        }
+                    ]
+                };
+            }
+            
+            updateDashboard();
+            updateSessions();
+            updatePayments();
+            updateNotifications();
+            updateProfile();
+        } catch (error) {
+            console.error('Error:', error);
+            showError();
+        }
+    }
+
+    function updateDashboard() {
+        // Update stats
+        const totalSessions = dashboardData.bookings?.length || 0;
+        const hoursLearned = totalSessions * 1; // Assuming 1 hour per session
+        const activeTutors = new Set(dashboardData.bookings?.map(b => b.tutor_name) || []).size;
+        
+        document.getElementById('totalSessions').textContent = totalSessions;
+        document.getElementById('hoursLearned').textContent = hoursLearned;
+        document.getElementById('activeTutors').textContent = activeTutors;
+
+        // Update next session
+        const nextSessionContainer = document.getElementById('nextSession');
+        const upcomingSessions = dashboardData.bookings?.filter(booking => {
+            const sessionDate = new Date(booking.date + ' ' + booking.time);
+            return sessionDate > new Date() && booking.status === 'confirmed';
+        }).sort((a, b) => new Date(a.date + ' ' + a.time) - new Date(b.date + ' ' + b.time));
+
+        if (upcomingSessions && upcomingSessions.length > 0) {
+            const nextSession = upcomingSessions[0];
+            nextSessionContainer.innerHTML = `
+                <div class="item">
+                    <div style="font-weight: 600;">${nextSession.subject} with ${nextSession.tutor_name}</div>
+                    <div style="color: var(--gray); font-size: 0.9rem; margin-top: 0.5rem;">
+                        ${formatDate(nextSession.date)} • ${formatTime(nextSession.time)}
+                    </div>
+                </div>
+            `;
+        } else {
+            nextSessionContainer.innerHTML = '<div class="empty"><p>No upcoming sessions</p><a href="/tutor-search" class="btn">Book a Session</a></div>';
+        }
+
+        // Update recent activity
+        const recentActivityContainer = document.getElementById('recentActivity');
+        const recentNotifications = dashboardData.notifications?.slice(0, 3) || [];
+        
+        if (recentNotifications.length > 0) {
+            recentActivityContainer.innerHTML = recentNotifications.map(notif => `
+                <div style="padding: 0.75rem 0; border-bottom: 1px solid var(--border); font-size: 0.9rem;">
+                    <div style="font-weight: 600; margin-bottom: 0.25rem;">${notif.title}</div>
+                    <div style="color: var(--gray); font-size: 0.8rem;">${notif.date}</div>
+                </div>
+            `).join('');
+        } else {
+            recentActivityContainer.innerHTML = '<div class="empty"><p>No recent activity</p></div>';
+        }
+    }
+
+    function updateSessions() {
+        const container = document.getElementById('sessionsList');
+        if (!dashboardData?.bookings) {
+            container.innerHTML = '<div class="loading">Loading...</div>';
+            return;
+        }
+
+        const upcoming = dashboardData.bookings.filter(booking => {
+            const sessionDate = new Date(booking.date + ' ' + booking.time);
+            return sessionDate > new Date() && ['confirmed', 'pending'].includes(booking.status);
+        });
+
+        if (upcoming.length === 0) {
+            container.innerHTML = '<div class="empty"><p>No upcoming sessions</p><a href="/tutor-search" class="btn">Book Your First Session</a></div>';
+            return;
+        }
+
+        container.innerHTML = upcoming.map(session => `
+            <div class="item">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <div>
+                        <div style="font-weight: 600;">${session.subject} with ${session.tutor_name}</div>
+                        <div style="color: var(--gray); font-size: 0.9rem;">${formatDate(session.date)} • ${formatTime(session.time)}</div>
+                    </div>
+                    <span class="status status-${session.status}">${session.status}</span>
+                </div>
+            </div>
+        `).join('');
+    }
+
+    function updatePayments() {
+        const container = document.getElementById('paymentsList');
+        if (!dashboardData?.payments) {
+            container.innerHTML = '<div class="loading">Loading...</div>';
+            return;
+        }
+
+        if (dashboardData.payments.length === 0) {
+            container.innerHTML = '<div class="empty"><p>No payment history yet</p></div>';
+            return;
+        }
+
+        container.innerHTML = dashboardData.payments.map(payment => `
+            <div class="item">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <div>
+                        <div style="font-weight: 600;">${payment.tutor_name}</div>
+                        <div style="color: var(--gray); font-size: 0.9rem;">${formatDate(payment.date)} • ${payment.method}</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <div style="font-weight: 600; color: var(--primary);">$${payment.amount.toFixed(2)}</div>
+                        <span class="status status-${payment.status}">${payment.status}</span>
+                    </div>
+                </div>
+            </div>
+        `).join('');
+    }
+
+    function updateNotifications() {
+        const container = document.getElementById('notificationsList');
+        if (!dashboardData?.notifications) {
+            container.innerHTML = '<div class="loading">Loading...</div>';
+            return;
+        }
+
+        if (dashboardData.notifications.length === 0) {
+            container.innerHTML = '<div class="empty"><p>You\'re all caught up!</p></div>';
+            return;
+        }
+
+        container.innerHTML = dashboardData.notifications.map(notif => `
+            <div class="item">
+                <div style="font-weight: 600;">${notif.title}</div>
+                <div style="color: var(--gray); margin: 0.5rem 0;">${notif.message}</div>
+                <div style="color: var(--gray); font-size: 0.8rem;">${notif.date}</div>
+            </div>
+        `).join('');
+    }
+
+    function updateProfile() {
+        const container = document.getElementById('profileContent');
+        container.innerHTML = `
+            <div style="max-width: 500px;">
+                <div style="margin-bottom: 1.5rem;">
+                    <label style="display: block; margin-bottom: 0.5rem; font-weight: 600;">Full Name</label>
+                    <input type="text" value="Alex Johnson" style="width: 100%; padding: 0.75rem; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text);">
+                </div>
+                <div style="margin-bottom: 1.5rem;">
+                    <label style="display: block; margin-bottom: 0.5rem; font-weight: 600;">Email</label>
+                    <input type="email" value="alex@example.com" style="width: 100%; padding: 0.75rem; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text);">
+                </div>
+                <div style="margin-bottom: 1.5rem;">
+                    <label style="display: block; margin-bottom: 0.5rem; font-weight: 600;">Phone</label>
+                    <input type="tel" value="+1 (555) 123-4567" style="width: 100%; padding: 0.75rem; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text);">
+                </div>
+                <div style="margin-bottom: 2rem;">
+                    <label style="display: block; margin-bottom: 0.5rem; font-weight: 600;">Preferred Subjects</label>
+                    <textarea placeholder="Mathematics, Physics, Computer Science..." style="width: 100%; padding: 0.75rem; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text); min-height: 80px; resize: vertical;"></textarea>
+                </div>
+                <div style="display: flex; gap: 1rem;">
+                    <button class="btn">Save Changes</button>
+                    <button class="btn btn-secondary">Cancel</button>
+                </div>
+            </div>
+        `;
+    }
+
+    function switchTo(section) {
+        document.querySelector(`[data-section="${section}"]`).click();
+    }
+
+    function formatDate(dateStr) {
+        const date = new Date(dateStr);
+        const today = new Date();
+        const tomorrow = new Date(today);
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        
+        if (date.toDateString() === today.toDateString()) return 'Today';
+        if (date.toDateString() === tomorrow.toDateString()) return 'Tomorrow';
+        return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    }
+
+    function formatTime(timeStr) {
+        return new Date('2000-01-01 ' + timeStr).toLocaleTimeString('en-US', { 
+            hour: 'numeric', minute: '2-digit', hour12: true 
+        });
+    }
+
+    function showError() {
+        const errorMsg = '<div class="empty"><p>Unable to load data</p><button class="btn" onclick="loadData()">Retry</button></div>';
+        document.getElementById('sessionsList').innerHTML = errorMsg;
+        document.getElementById('paymentsList').innerHTML = errorMsg;
+        document.getElementById('notificationsList').innerHTML = errorMsg;
+    }
+
+    // Auto-refresh every 2 minutes
+    setInterval(loadData, 120000);
+</script>
+</html>

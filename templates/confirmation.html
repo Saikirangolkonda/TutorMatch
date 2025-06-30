@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Booking Confirmed - TutorMatch</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', sans-serif; background: #f5f7fa; }
+
+        .header { background: linear-gradient(135deg, #15c249 0%, #15c249 100%); color: white; padding: 1rem 0; }
+        .nav { display: flex; justify-content: space-between; align-items: center; max-width: 1200px; margin: 0 auto; padding: 0 20px; }
+        .logo { font-size: 1.8rem; font-weight: bold; }
+        .nav-links a { color: white; text-decoration: none; margin-left: 20px; opacity: 0.9; }
+        
+        .container { max-width: 800px; margin: 0 auto; padding: 20px; }
+        .confirmation-page { text-align: center; }
+        .success-icon { width: 80px; height: 80px; background: #27ae60; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 20px; color: white; font-size: 2rem; }
+        .confirmation-details { background: white; padding: 25px; border-radius: 15px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); margin: 20px 0; text-align: left; }
+        
+        .tutor-info { display: flex; align-items: center; gap: 15px; margin-bottom: 20px; }
+        .tutor-avatar { width: 60px; height: 60px; border-radius: 50%; background: linear-gradient(135deg, #0a160e, #010302); display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; font-size: 1.2rem; }
+
+        .session-details { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px; }
+        .detail-item { margin-bottom: 15px; }
+        .detail-item strong { color: #2c3e50; display: block; margin-bottom: 5px; }
+        .detail-item p { color: #666; }
+        
+        .session-id { background: #f8f9fa; padding: 15px; border-radius: 8px; text-align: center; margin: 20px 0; }
+        .session-id strong { color: #667eea; font-family: monospace; font-size: 1.1rem; }
+        
+        .next-steps { background: #e8f4fd; padding: 20px; border-radius: 15px; margin-top: 20px; text-align: left; }
+        .next-steps h4 { color: #2c3e50; margin-bottom: 15px; }
+        .next-steps ul { color: #666; margin-left: 20px; }
+        .next-steps li { margin-bottom: 8px; }
+        
+        .btn { padding: 12px 25px; background: linear-gradient(135deg, #667eea, #764ba2); color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 1rem; transition: transform 0.2s; margin: 0 10px; text-decoration: none; display: inline-block; }
+        .btn:hover { transform: scale(1.02); }
+        .btn-secondary { background: #95a5a6; }
+        
+        .meeting-link { background: #f8f9fa; padding: 15px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #27ae60; }
+        .meeting-link h4 { color: #2c3e50; margin-bottom: 10px; }
+        .meeting-link p { color: #666; font-size: 0.9rem; margin-bottom: 10px; }
+        .meeting-link strong { color: #667eea; font-weight: 600; }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <nav class="nav">
+            <div class="logo">TutorMatch</div>
+            <div class="nav-links">
+                <a href="/student-dashboard">Dashboard</a>
+                <a href="/tutor-search">Find More Tutors</a>
+            </div>
+        </nav>
+    </header>
+
+    <div class="container">
+        <div class="confirmation-page">
+            <div class="success-icon">✓</div>
+            <h1 style="color: #27ae60; margin-bottom: 10px;">Payment Successful!</h1>
+            <p style="color: #666; font-size: 1.1rem; margin-bottom: 30px;">Your session has been booked successfully</p>
+            
+            <div class="confirmation-details">
+                <h3 style="color: #2c3e50; margin-bottom: 20px;">📅 Session Details</h3>
+                
+                <div class="tutor-info">
+                    <div class="tutor-avatar">{{ booking.tutor_data.avatar or booking.tutor_data.name[:2].upper() }}</div>
+                    <div>
+                        <h4>{{ booking.tutor_data.name }}</h4>
+                        <div style="color: #666;">
+                            {% if booking.tutor_data.subjects %}
+                                {{ booking.tutor_data.subjects|join(', ') }} Tutor
+                            {% else %}
+                                Subject Tutor
+                            {% endif %}
+                        </div>
+                        <div style="color: #f39c12; font-size: 0.9rem;">★★★★★ ({{ booking.tutor_data.rating }})</div>
+                    </div>
+                </div>
+
+                <div class="session-details">
+                    <div class="detail-item">
+                        <strong>Date & Time:</strong>
+                        <p>{{ booking.date }} at {{ booking.time }}</p>
+                    </div>
+                    <div class="detail-item">
+                        <strong>Duration:</strong>
+                        <p>{{ booking.sessions_count }} hour(s)</p>
+                    </div>
+                    <div class="detail-item">
+                        <strong>Subject:</strong>
+                        <p>{{ booking.subject }}</p>
