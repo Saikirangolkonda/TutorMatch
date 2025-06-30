@@ -46,13 +46,15 @@ async def register_page(request: Request):
 
 @app.post("/register")
 async def register(email: str = Form(...), password: str = Form(...), name: str = Form(...)):
+    user_item = {
+        "email": email,
+        "password": password,
+        "name": name,
+        "role": "student"
+    }
     try:
-        users_table.put_item(Item={
-            "email": email,
-            "password": password,
-            "name": name,
-            "role": "student"
-        })
+        print("Registering user:", user_item)
+        users_table.put_item(Item=user_item)
         return RedirectResponse(url="/login", status_code=302)
     except ClientError as e:
         print(f"Register error: {e}")
@@ -131,6 +133,7 @@ async def book_session(
     }
 
     try:
+        print("Creating booking:", booking)
         bookings_table.put_item(Item=booking)
     except ClientError as e:
         print(f"Booking error: {e}")
@@ -159,14 +162,17 @@ async def process_payment(
 
         payment_id = str(uuid.uuid4())
 
-        payments_table.put_item(Item={
+        payment_item = {
             "payment_id": payment_id,
             "booking_id": booking_id,
             "amount": booking["total_price"],
             "payment_method": payment_method,
             "status": "completed",
             "created_at": datetime.now().isoformat()
-        })
+        }
+
+        print("Processing payment:", payment_item)
+        payments_table.put_item(Item=payment_item)
 
         bookings_table.update_item(
             Key={"booking_id": booking_id},
