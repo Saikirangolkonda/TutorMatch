@@ -2,7 +2,7 @@ from fastapi import FastAPI, Request, Form, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
-from datetime import datetime, timedelta
+from datetime import datetime
 import boto3
 import os
 import uuid
@@ -12,7 +12,7 @@ app = FastAPI()
 
 # AWS clients
 dynamodb = boto3.resource('dynamodb', region_name='ap-south-1')
-sns_client = boto3.client('sns', region_name='ap-south-1')
+ses_client = boto3.client('ses', region_name='ap-south-1')
 
 # DynamoDB Tables
 users_table = dynamodb.Table('Users_Table')
@@ -20,8 +20,8 @@ bookings_table = dynamodb.Table('Bookings_Table')
 payments_table = dynamodb.Table('Payments_Table')
 tutors_table = dynamodb.Table('Tutors_Table')
 
-# SNS Topic ARN
-SNS_TOPIC_ARN = 'arn:aws:sns:ap-south-1:686255965861:TutorMatchNotifications'
+# Verified sender email in SES
+SENDER_EMAIL = 'your_verified_sender_email@example.com'
 
 templates = Jinja2Templates(directory="templates")
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -43,16 +43,13 @@ async def register(
         'role': 'student'
     })
 
-    # Send welcome email using SNS
-    sns_client.publish(
-        TopicArn=SNS_TOPIC_ARN,
-        Message=f"Hello {name}, welcome to TutorMatch!",
-        Subject="Welcome to TutorMatch",
-        MessageAttributes={
-            'email': {
-                'DataType': 'String',
-                'StringValue': email
-            }
+    # Send welcome email using SES
+    ses_client.send_email(
+        Source=SENDER_EMAIL,
+        Destination={'ToAddresses': [email]},
+        Message={
+            'Subject': {'Data': 'Welcome to TutorMatch'},
+            'Body': {'Text': {'Data': f"Hello {name}, welcome to TutorMatch!"}}
         }
     )
 
@@ -94,16 +91,13 @@ async def book_session(
 
     bookings_table.put_item(Item=booking)
 
-    # Send booking confirmation using SNS
-    sns_client.publish(
-        TopicArn=SNS_TOPIC_ARN,
-        Message=f"Your session with {tutor.get('name', 'the tutor')} on {date} at {time} has been booked.",
-        Subject="Session Booking Confirmation",
-        MessageAttributes={
-            'email': {
-                'DataType': 'String',
-                'StringValue': email
-            }
+    # Send booking confirmation email using SES
+    ses_client.send_email(
+        Source=SENDER_EMAIL,
+        Destination={'ToAddresses': [email]},
+        Message={
+            'Subject': {'Data': 'Session Booking Confirmation'},
+            'Body': {'Text': {'Data': f"Your session with {tutor.get('name', 'the tutor')} on {date} at {time} has been booked."}}
         }
     )
 
@@ -134,16 +128,13 @@ async def process_payment(
         ExpressionAttributeValues={':status': 'confirmed', ':pid': payment_id}
     )
 
-    # Send payment confirmation using SNS
-    sns_client.publish(
-        TopicArn=SNS_TOPIC_ARN,
-        Message=f"Your payment of ${amount} has been received and your session is confirmed.",
-        Subject="Payment Confirmation",
-        MessageAttributes={
-            'email': {
-                'DataType': 'String',
-                'StringValue': email
-            }
+    # Send payment confirmation email using SES
+    ses_client.send_email(
+        Source=SENDER_EMAIL,
+        Destination={'ToAddresses': [email]},
+        Message={
+            'Subject': {'Data': 'Payment Confirmation'},
+            'Body': {'Text': {'Data': f"Your payment of ${amount} has been received and your session is confirmed."}}
         }
     )
 
