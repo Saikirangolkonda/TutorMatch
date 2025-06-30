@@ -1,9 +1,10 @@
-from flask import Flask, render_template, request, redirect, url_for, abort
+from flask import Flask, render_template, request, redirect, url_for, abort, jsonify
 import boto3
 from botocore.exceptions import ClientError
-from datetime import datetime
+from datetime import datetime, timedelta
 import uuid
 import os
+import json
 
 app = Flask(__name__)
 
@@ -44,7 +45,6 @@ def register():
             "role": "student"
         }
         try:
-            print("Registering:", user_item)
             users_table.put_item(Item=user_item)
             return redirect(url_for("login"))
         except ClientError as e:
@@ -115,7 +115,6 @@ def book_session(tutor_id):
     }
 
     try:
-        print("Putting booking:", booking)
         bookings_table.put_item(Item=booking)
     except ClientError as e:
         print("Booking error:", e)
@@ -126,7 +125,15 @@ def book_session(tutor_id):
 @app.route("/payment")
 def payment():
     booking_id = request.args.get("booking_id")
-    return render_template("payment.html", booking_id=booking_id)
+    try:
+        response = bookings_table.get_item(Key={"booking_id": booking_id})
+        booking = response.get("Item")
+        if not booking:
+            abort(404)
+        return render_template("payment.html", booking_id=booking_id, booking=booking)
+    except Exception as e:
+        print("Payment page error:", e)
+        abort(500)
 
 @app.route("/process-payment", methods=["POST"])
 def process_payment():
@@ -153,10 +160,8 @@ def process_payment():
             "created_at": datetime.now().isoformat()
         }
 
-        print("Putting payment:", payment_item)
         payments_table.put_item(Item=payment_item)
 
-        print("Updating booking status to confirmed")
         bookings_table.update_item(
             Key={"booking_id": booking_id},
             UpdateExpression="SET #s = :status, payment_id = :pid",
@@ -164,7 +169,6 @@ def process_payment():
             ExpressionAttributeValues={":status": "confirmed", ":pid": payment_id}
         )
 
-        print("Publishing SNS notification")
         sns.publish(
             TopicArn=SNS_TOPIC_ARN,
             Subject="New Booking Confirmed",
@@ -180,7 +184,19 @@ def process_payment():
 @app.route("/confirmation")
 def confirmation():
     booking_id = request.args.get("booking_id")
-    return render_template("confirmation.html", booking_id=booking_id)
+    try:
+        response = bookings_table.get_item(Key={"booking_id": booking_id})
+        booking = response.get("Item")
+        if not booking:
+            abort(404)
+        return render_template("confirmation.html", booking_id=booking_id, booking=booking)
+    except Exception as e:
+        print("Confirmation error:", e)
+        abort(500)
+
+@app.route("/health")
+def health():
+    return jsonify({"status": "ok", "tutors": len(tutors_data)})
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=8000)
