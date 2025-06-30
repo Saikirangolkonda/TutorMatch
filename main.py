@@ -4,40 +4,49 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 import uvicorn
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Optional, Dict, Any
 import json
 import uuid
 import os
-import boto3 # Import boto3 for AWS services
-from botocore.exceptions import ClientError # For handling AWS client errors
+import boto3
+from botocore.exceptions import ClientError
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="TutorMatch", description="Connect students with tutors")
 
-# --- AWS Service Initialization ---
-# Initialize DynamoDB client
-dynamodb = boto3.resource('dynamodb', region_name='ap-south-1') # Specify your region
-users_table = dynamodb.Table('Users_Table')
-tutors_table = dynamodb.Table('Tutors_Table') # Although tutors_data.json is still used, this is here for future
-bookings_table = dynamodb.Table('Bookings_Table')
-payments_table = dynamodb.Table('Payments_Table')
+# AWS Configuration
+AWS_REGION = os.getenv('AWS_REGION', 'ap-south-1')
+SNS_TOPIC_ARN = os.getenv('SNS_TOPIC_ARN', 'arn:aws:sns:ap-south-1:686255965861:TutorBookingTopic')
 
-# Initialize SNS client
-sns_client = boto3.client('sns', region_name='ap-south-1') # Specify your region
-SNS_TOPIC_ARN = "arn:aws:sns:ap-south-1:686255965861:TutorBookingTopic" # Your SNS Topic ARN
+# Initialize AWS clients
+try:
+    dynamodb = boto3.resource('dynamodb', region_name=AWS_REGION)
+    sns_client = boto3.client('sns', region_name=AWS_REGION)
+    
+    # DynamoDB tables
+    bookings_table = dynamodb.Table('Bookings_Table')
+    payments_table = dynamodb.Table('Payments_Table')
+    tutors_table = dynamodb.Table('Tutors_Table')
+    users_table = dynamodb.Table('Users_Table')
+    
+    logger.info("AWS services initialized successfully")
+except Exception as e:
+    logger.error(f"Error initializing AWS services: {e}")
+    # Fallback to local storage for development
+    dynamodb = None
+    sns_client = None
 
-# Initialize tutors_data with error handling (still loading from JSON for now)
+# Initialize tutors_data with error handling
 tutors_data = {}
 try:
     tutors_file_path = os.path.join("templates", "tutors_data.json")
     if os.path.exists(tutors_file_path):
         with open(tutors_file_path) as f:
             tutors_data = json.load(f)
-            # Optionally, populate Tutors_Table with this data if it's empty
-            # for tutor_id, tutor_details in tutors_data.items():
-            #     try:
-            #         tutors_table.put_item(Item={"tutor_id": tutor_id, **tutor_details})
-            #     except ClientError as e:
-            #         print(f"Error adding tutor {tutor_id} to DynamoDB: {e.response['Error']['Message']}")
     else:
         # Create default tutors data if file doesn't exist
         tutors_data = {
@@ -58,27 +67,35 @@ try:
                 "availability": ["Tuesday 10-18", "Thursday 10-18", "Saturday 9-15"]
             }
         }
-        # Save default data to file
+        # Save default data to file and DynamoDB
         os.makedirs("templates", exist_ok=True)
         with open(tutors_file_path, 'w') as f:
             json.dump(tutors_data, f, indent=2)
-        # Populate Tutors_Table with default data
-        for tutor_id, tutor_details in tutors_data.items():
+        
+        # Initialize DynamoDB with default tutors
+        if tutors_table:
             try:
-                tutors_table.put_item(Item={"tutor_id": tutor_id, **tutor_details})
-            except ClientError as e:
-                print(f"Error adding tutor {tutor_id} to DynamoDB: {e.response['Error']['Message']}")
+                for tutor_id, tutor_data in tutors_data.items():
+                    tutor_item = {
+                        'tutor_id': tutor_id,
+                        **tutor_data,
+                        'created_at': datetime.now().isoformat()
+                    }
+                    tutors_table.put_item(Item=tutor_item)
+                logger.info("Default tutors added to DynamoDB")
+            except Exception as e:
+                logger.error(f"Error adding default tutors to DynamoDB: {e}")
+                
 except Exception as e:
-    print(f"Error loading tutors data: {e}")
+    logger.error(f"Error loading tutors data: {e}")
     tutors_data = {}
 
-# Mock database (will be replaced by DynamoDB, but kept for variable names)
-# users = {} # Now handled by Users_Table
-# sessions = {} # Sessions logic needs to be adapted for DynamoDB
-# session_requests = {} # Session requests can be managed in a bookings table or separate table
-# bookings = {} # Now handled by Bookings_Table
-# payments = {} # Now handled by Payments_Table
-
+# Mock database fallback (for development)
+users = {}
+sessions = {}
+session_requests = {}
+bookings = {}
+payments = {}
 
 # Initialize templates and static files with error handling
 try:
@@ -87,7 +104,106 @@ try:
     if os.path.exists("static"):
         app.mount("/static", StaticFiles(directory="static"), name="static")
 except Exception as e:
-    print(f"Error setting up templates/static files: {e}")
+    logger.error(f"Error setting up templates/static files: {e}")
+
+# DynamoDB helper functions
+async def get_user_from_db(email: str) -> Optional[Dict[str, Any]]:
+    """Get user from DynamoDB"""
+    if not users_table:
+        return users.get(email)
+    
+    try:
+        response = users_table.get_item(Key={'email': email})
+        return response.get('Item')
+    except ClientError as e:
+        logger.error(f"Error getting user from DynamoDB: {e}")
+        return None
+
+async def save_user_to_db(user_data: Dict[str, Any]) -> bool:
+    """Save user to DynamoDB"""
+    if not users_table:
+        users[user_data['email']] = user_data
+        return True
+    
+    try:
+        user_data['created_at'] = datetime.now().isoformat()
+        users_table.put_item(Item=user_data)
+        return True
+    except ClientError as e:
+        logger.error(f"Error saving user to DynamoDB: {e}")
+        return False
+
+async def save_booking_to_db(booking_data: Dict[str, Any]) -> bool:
+    """Save booking to DynamoDB"""
+    if not bookings_table:
+        bookings[booking_data['booking_id']] = booking_data
+        return True
+    
+    try:
+        bookings_table.put_item(Item=booking_data)
+        return True
+    except ClientError as e:
+        logger.error(f"Error saving booking to DynamoDB: {e}")
+        return False
+
+async def get_booking_from_db(booking_id: str) -> Optional[Dict[str, Any]]:
+    """Get booking from DynamoDB"""
+    if not bookings_table:
+        return bookings.get(booking_id)
+    
+    try:
+        response = bookings_table.get_item(Key={'booking_id': booking_id})
+        return response.get('Item')
+    except ClientError as e:
+        logger.error(f"Error getting booking from DynamoDB: {e}")
+        return None
+
+async def save_payment_to_db(payment_data: Dict[str, Any]) -> bool:
+    """Save payment to DynamoDB"""
+    if not payments_table:
+        payments[payment_data['payment_id']] = payment_data
+        return True
+    
+    try:
+        payments_table.put_item(Item=payment_data)
+        return True
+    except ClientError as e:
+        logger.error(f"Error saving payment to DynamoDB: {e}")
+        return False
+
+async def get_student_bookings_from_db(student_email: str = None) -> list:
+    """Get all bookings for a student from DynamoDB"""
+    if not bookings_table:
+        return [{"id": k, **v} for k, v in bookings.items()]
+    
+    try:
+        response = bookings_table.scan()
+        items = response.get('Items', [])
+        
+        # Filter by student email if provided
+        if student_email:
+            items = [item for item in items if item.get('student_email') == student_email]
+        
+        return items
+    except ClientError as e:
+        logger.error(f"Error getting bookings from DynamoDB: {e}")
+        return []
+
+async def send_sns_notification(message: str, subject: str = "TutorMatch Notification"):
+    """Send notification via SNS"""
+    if not sns_client:
+        logger.info(f"SNS not available. Would send: {subject} - {message}")
+        return
+    
+    try:
+        response = sns_client.publish(
+            TopicArn=SNS_TOPIC_ARN,
+            Message=message,
+            Subject=subject
+        )
+        logger.info(f"SNS notification sent: {response['MessageId']}")
+    except ClientError as e:
+        logger.error(f"Error sending SNS notification: {e}")
 
 # Homepage route
 @app.get("/", response_class=HTMLResponse)
@@ -182,37 +298,36 @@ async def register_page(request: Request):
 
 @app.post("/login")
 async def login(email: str = Form(...), password: str = Form(...)):
-    try:
-        response = users_table.get_item(Key={'email': email})
-        user = response.get('Item')
-        if user and user['password'] == password:
-            return RedirectResponse(url="/student-dashboard", status_code=302)
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-    except ClientError as e:
-        raise HTTPException(status_code=500, detail=f"Database error: {e.response['Error']['Message']}")
+    user = await get_user_from_db(email)
+    if user and user.get("password") == password:
+        return RedirectResponse(url="/student-dashboard", status_code=302)
+    raise HTTPException(status_code=401, detail="Invalid credentials")
 
 @app.post("/register")
 async def register(
-    email: str = Form(...),
-    password: str = Form(...),
+    email: str = Form(...), 
+    password: str = Form(...), 
     name: str = Form(...)
 ):
-    try:
-        response = users_table.get_item(Key={'email': email})
-        if response.get('Item'):
-            raise HTTPException(status_code=400, detail="User already exists")
-
-        users_table.put_item(
-            Item={
-                "email": email,
-                "password": password,
-                "name": name,
-                "role": "student"
-            }
-        )
-        return RedirectResponse(url="/login", status_code=302)
-    except ClientError as e:
-        raise HTTPException(status_code=500, detail=f"Database error: {e.response['Error']['Message']}")
+    existing_user = await get_user_from_db(email)
+    if not existing_user:
+        user_data = {
+            "email": email,
+            "password": password,
+            "name": name,
+            "role": "student"
+        }
+        success = await save_user_to_db(user_data)
+        if success:
+            # Send welcome notification
+            await send_sns_notification(
+                f"Welcome to TutorMatch, {name}! Your account has been created successfully.",
+                "Welcome to TutorMatch"
+            )
+            return RedirectResponse(url="/login", status_code=302)
+        else:
+            raise HTTPException(status_code=500, detail="Failed to create user")
+    raise HTTPException(status_code=400, detail="User already exists")
 
 # Dashboard and main application routes
 @app.get("/student-dashboard", response_class=HTMLResponse)
@@ -239,8 +354,6 @@ async def student_dashboard(request: Request):
 
 @app.get("/tutor-search", response_class=HTMLResponse)
 async def tutor_search(request: Request):
-    # For now, still using tutors_data from the JSON file.
-    # In a full DynamoDB implementation, you would query Tutors_Table here.
     try:
         return templates.TemplateResponse("tutor_search.html", {
             "request": request,
@@ -275,7 +388,7 @@ async def tutor_search(request: Request):
 # Tutor profile and booking routes
 @app.get("/tutor-profile/{tutor_id}", response_class=HTMLResponse)
 async def tutor_profile(request: Request, tutor_id: str):
-    tutor = tutors_data.get(tutor_id) # Still getting from in-memory dict
+    tutor = tutors_data.get(tutor_id)
     if not tutor:
         raise HTTPException(status_code=404, detail="Tutor not found")
     
@@ -370,9 +483,10 @@ async def book_session_from_profile(
     subject: str = Form(...),
     session_type: str = Form("Single Session"),
     sessions_count: int = Form(1),
-    total_price: float = Form(...), # This total_price from form is not used, calculated below
+    total_price: float = Form(...),
     learning_goals: str = Form(""),
-    session_format: str = Form("Online Video Call")
+    session_format: str = Form("Online Video Call"),
+    student_email: str = Form("")  # This should come from session in production
 ):
     tutor = tutors_data.get(tutor_id)
     if not tutor:
@@ -384,9 +498,10 @@ async def book_session_from_profile(
     calculated_price = tutor.get('rate', 25) * sessions_count
 
     booking = {
-        "booking_id": booking_id, # Changed key to match DynamoDB partition key
+        "booking_id": booking_id,
         "tutor_id": tutor_id,
-        "tutor_name": tutor["name"], # Store tutor name for easier retrieval
+        "tutor_data": tutor,
+        "student_email": student_email,
         "date": date,
         "time": time,
         "subject": subject,
@@ -399,10 +514,15 @@ async def book_session_from_profile(
         "created_at": datetime.now().isoformat()
     }
 
-    try:
-        bookings_table.put_item(Item=booking)
-    except ClientError as e:
-        raise HTTPException(status_code=500, detail=f"Database error during booking: {e.response['Error']['Message']}")
+    success = await save_booking_to_db(booking)
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to save booking")
+
+    # Send booking notification
+    await send_sns_notification(
+        f"New booking created: {tutor['name']} - {subject} on {date} at {time}. Booking ID: {booking_id}",
+        "New Tutor Booking"
+    )
 
     return RedirectResponse(url=f"/payment?booking_id={booking_id}", status_code=302)
 
@@ -410,15 +530,11 @@ async def book_session_from_profile(
 @app.get("/payment", response_class=HTMLResponse)
 async def payment_page(request: Request, booking_id: str = ""):
     if not booking_id:
-        raise HTTPException(status_code=400, detail="Booking ID is required")
+        raise HTTPException(status_code=404, detail="Booking ID required")
     
-    try:
-        response = bookings_table.get_item(Key={'booking_id': booking_id})
-        booking = response.get('Item')
-        if not booking:
-            raise HTTPException(status_code=404, detail="Booking not found")
-    except ClientError as e:
-        raise HTTPException(status_code=500, detail=f"Database error: {e.response['Error']['Message']}")
+    booking = await get_booking_from_db(booking_id)
+    if not booking:
+        raise HTTPException(status_code=404, detail="Booking not found")
     
     try:
         return templates.TemplateResponse("payment.html", {
@@ -433,7 +549,7 @@ async def payment_page(request: Request, booking_id: str = ""):
             <body>
                 <h1>Payment</h1>
                 <h2>Booking Summary</h2>
-                <p><strong>Tutor:</strong> {booking.get('tutor_name', 'N/A')}</p>
+                <p><strong>Tutor:</strong> {booking['tutor_data']['name']}</p>
                 <p><strong>Subject:</strong> {booking['subject']}</p>
                 <p><strong>Date:</strong> {booking['date']}</p>
                 <p><strong>Time:</strong> {booking['time']}</p>
@@ -479,92 +595,52 @@ async def process_payment(
     payment_method: str = Form(...),
     card_number: str = Form(""),
     cardholder_name: str = Form(""),
-    email: str = Form(...), # Assuming this is the student's email for notifications
-    phone: str = Form("")
+    email: str = Form(...),
+    phone: str = Form(...)
 ):
-    try:
-        response = bookings_table.get_item(Key={'booking_id': booking_id})
-        booking = response.get('Item')
-        if not booking:
-            raise HTTPException(status_code=404, detail="Booking not found")
-    except ClientError as e:
-        raise HTTPException(status_code=500, detail=f"Database error: {e.response['Error']['Message']}")
+    booking = await get_booking_from_db(booking_id)
+    if not booking:
+        raise HTTPException(status_code=404, detail="Booking not found")
     
     # Process payment (mock)
     payment_id = str(uuid.uuid4())
-    payment_record = {
-        "payment_id": payment_id, # Changed key to match DynamoDB partition key
+    payment_data = {
+        "payment_id": payment_id,
         "booking_id": booking_id,
-        "amount": float(booking["total_price"]), # Ensure float
+        "amount": booking["total_price"],
         "payment_method": payment_method,
         "status": "completed",
+        "cardholder_name": cardholder_name,
+        "email": email,
+        "phone": phone,
         "created_at": datetime.now().isoformat()
     }
     
-    try:
-        payments_table.put_item(Item=payment_record)
-        
-        # Update booking status in DynamoDB
-        bookings_table.update_item(
-            Key={'booking_id': booking_id},
-            UpdateExpression="SET #s = :status_val, payment_id = :pid",
-            ExpressionAttributeNames={'#s': 'status'},
-            ExpressionAttributeValues={
-                ':status_val': "confirmed",
-                ':pid': payment_id
-            }
-        )
-        booking["status"] = "confirmed" # Update local booking object for confirmation page
-        booking["payment_id"] = payment_id
-
-        # Send SNS Notification
-        try:
-            message_subject = "TutorMatch: Session Confirmation & Payment Details"
-            message_body = f"""
-Dear Student,
-
-Your session with {booking.get('tutor_name', 'N/A')} on {booking['date']} at {booking['time']} for {booking['subject']} has been successfully confirmed.
-
-Payment Details:
-- Amount Paid: ${booking['total_price']}
-- Payment Method: {payment_method}
-- Transaction ID: {payment_id}
-
-Booking Details:
-- Session Format: {booking['session_format']}
-- Learning Goals: {booking.get('learning_goals', 'Not specified')}
-
-We look forward to your session!
-
-Best regards,
-The TutorMatch Team
-            """
-            sns_client.publish(
-                TopicArn=SNS_TOPIC_ARN,
-                Subject=message_subject,
-                Message=message_body
-            )
-            print(f"SNS notification sent for booking ID: {booking_id} to topic: {SNS_TOPIC_ARN}")
-        except ClientError as sns_e:
-            print(f"Error sending SNS notification: {sns_e.response['Error']['Message']}")
-
-    except ClientError as e:
-        raise HTTPException(status_code=500, detail=f"Database error during payment processing: {e.response['Error']['Message']}")
+    success = await save_payment_to_db(payment_data)
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to process payment")
+    
+    # Update booking status
+    booking["status"] = "confirmed"
+    booking["payment_id"] = payment_id
+    await save_booking_to_db(booking)
+    
+    # Send payment confirmation notification
+    await send_sns_notification(
+        f"Payment confirmed for booking {booking_id}. Amount: ${booking['total_price']}. Session with {booking['tutor_data']['name']} on {booking['date']}.",
+        "Payment Confirmation - TutorMatch"
+    )
     
     return RedirectResponse(url=f"/confirmation?booking_id={booking_id}", status_code=302)
 
 @app.get("/confirmation", response_class=HTMLResponse)
 async def confirmation_page(request: Request, booking_id: str = ""):
     if not booking_id:
-        raise HTTPException(status_code=400, detail="Booking ID is required")
+        raise HTTPException(status_code=404, detail="Booking ID required")
     
-    try:
-        response = bookings_table.get_item(Key={'booking_id': booking_id})
-        booking = response.get('Item')
-        if not booking:
-            raise HTTPException(status_code=404, detail="Booking not found")
-    except ClientError as e:
-        raise HTTPException(status_code=500, detail=f"Database error: {e.response['Error']['Message']}")
+    booking = await get_booking_from_db(booking_id)
+    if not booking:
+        raise HTTPException(status_code=404, detail="Booking not found")
     
     try:
         return templates.TemplateResponse("confirmation.html", {
@@ -581,7 +657,7 @@ async def confirmation_page(request: Request, booking_id: str = ""):
                 
                 <h2>Booking Details</h2>
                 <p><strong>Booking ID:</strong> {booking['booking_id']}</p>
-                <p><strong>Tutor:</strong> {booking.get('tutor_name', 'N/A')}</p>
+                <p><strong>Tutor:</strong> {booking['tutor_data']['name']}</p>
                 <p><strong>Subject:</strong> {booking['subject']}</p>
                 <p><strong>Date:</strong> {booking['date']}</p>
                 <p><strong>Time:</strong> {booking['time']}</p>
@@ -595,126 +671,77 @@ async def confirmation_page(request: Request, booking_id: str = ""):
 
 # API endpoints
 @app.get("/api/student-data")
-async def get_student_data(student_email: str = ""): # In a real app, student_email would come from authenticated session
+async def get_student_data(student_email: str = ""):
     """Get student's bookings, payments, and notifications"""
     
-    student_bookings = []
+    student_bookings = await get_student_bookings_from_db(student_email)
     student_payments = []
     notifications = []
     
-    # In a real application, you would query bookings and payments specific to the logged-in student.
-    # For now, fetching all and filtering (less efficient but works with current structure).
-    # Ideally, bookings_table would have a GSI on student_email.
-    
-    try:
-        # Scan bookings (inefficient for large tables, consider Query with GSI if student_email is available)
-        response_bookings = bookings_table.scan()
-        all_bookings = response_bookings.get('Items', [])
-
-        # Scan payments
-        response_payments = payments_table.scan()
-        all_payments = response_payments.get('Items', [])
-
-        # Filter bookings and payments (if student_email was truly passed and associated)
-        # For this mock, we just process all bookings and payments
+    # Format bookings data
+    formatted_bookings = []
+    for booking in student_bookings:
+        formatted_booking = {
+            "id": booking.get("booking_id", booking.get("id")),
+            "tutor_name": booking.get("tutor_data", {}).get("name", "Unknown"),
+            "subject": booking.get("subject"),
+            "date": booking.get("date"),
+            "time": booking.get("time"),
+            "status": booking.get("status"),
+            "total_price": booking.get("total_price"),
+            "session_format": booking.get("session_format"),
+            "created_at": booking.get("created_at")
+        }
+        formatted_bookings.append(formatted_booking)
         
-        for booking in all_bookings:
-            # Assuming student_email is passed and we can link bookings to students
-            # For demonstration, let's assume all bookings are for "the student"
-            student_bookings.append({
-                "id": booking["booking_id"],
-                "tutor_name": booking.get("tutor_name", "N/A"),
-                "subject": booking["subject"],
-                "date": booking["date"],
-                "time": booking["time"],
-                "status": booking["status"],
-                "total_price": booking["total_price"],
-                "session_format": booking["session_format"],
-                "created_at": booking["created_at"]
+        # Get payment info if available
+        payment_id = booking.get("payment_id")
+        if payment_id:
+            # In a real implementation, you'd query the payments table
+            student_payments.append({
+                "id": payment_id,
+                "tutor_name": booking.get("tutor_data", {}).get("name", "Unknown"),
+                "amount": booking.get("total_price"),
+                "status": "completed",
+                "date": booking.get("created_at"),
+                "method": "credit_card"
             })
+        
+        # Generate notifications
+        try:
+            booking_date = datetime.fromisoformat(booking.get("created_at", datetime.now().isoformat()))
             
-            if "payment_id" in booking:
-                # Find corresponding payment
-                payment_record = next((p for p in all_payments if p.get('payment_id') == booking["payment_id"]), None)
-                if payment_record:
-                    student_payments.append({
-                        "id": payment_record["payment_id"],
-                        "tutor_name": booking.get("tutor_name", "N/A"),
-                        "amount": payment_record["amount"],
-                        "status": payment_record["status"],
-                        "date": payment_record["created_at"],
-                        "method": payment_record["payment_method"]
-                    })
-            
-            booking_date_iso = booking["created_at"]
-            try:
-                booking_date_obj = datetime.fromisoformat(booking_date_iso)
-            except ValueError:
-                booking_date_obj = datetime.now() # Fallback for invalid date format
-
-            if booking["status"] == "confirmed":
+            if booking.get("status") == "confirmed":
                 notifications.append({
                     "type": "success",
                     "title": "Session Confirmed",
-                    "message": f"Your {booking['subject']} session with {booking.get('tutor_name', 'N/A')} is confirmed for {booking['date']}.",
-                    "date": booking_date_obj.strftime("%B %d, %Y")
+                    "message": f"Your {booking.get('subject')} session with {booking.get('tutor_data', {}).get('name', 'Unknown')} is confirmed for {booking.get('date')}.",
+                    "date": booking_date.strftime("%B %d, %Y")
                 })
                 
                 try:
-                    session_datetime_str = f"{booking['date']} {booking['time']}"
-                    session_datetime = datetime.strptime(session_datetime_str, "%Y-%m-%d %H:%M")
-                    
+                    session_datetime = datetime.strptime(f"{booking.get('date')} {booking.get('time')}", "%Y-%m-%d %H:%M")
                     if session_datetime > datetime.now() and session_datetime < datetime.now() + timedelta(days=1):
                         notifications.append({
                             "type": "reminder",
                             "title": "Session Reminder",
-                            "message": f"You have a {booking['subject']} session tomorrow at {booking['time']}.",
+                            "message": f"You have a {booking.get('subject')} session tomorrow at {booking.get('time')}.",
                             "date": datetime.now().strftime("%B %d, %Y")
                         })
-                        # Send SNS notification for upcoming session
-                        try:
-                            message_subject = "TutorMatch: Upcoming Session Reminder"
-                            message_body = f"""
-Dear Student,
-
-This is a reminder for your upcoming session with {booking.get('tutor_name', 'N/A')}.
-
-Details:
-- Subject: {booking['subject']}
-- Date: {booking['date']}
-- Time: {booking['time']}
-- Session Format: {booking['session_format']}
-
-Please be prepared!
-
-Best regards,
-The TutorMatch Team
-                            """
-                            # You'd need to know the student's email here. Assuming it's the `student_email` passed to the function,
-                            # or retrieved from a user session. For this demo, sending to the topic.
-                            sns_client.publish(
-                                TopicArn=SNS_TOPIC_ARN,
-                                Subject=message_subject,
-                                Message=message_body
-                            )
-                            print(f"SNS reminder sent for booking ID: {booking['booking_id']} to topic: {SNS_TOPIC_ARN}")
-                        except ClientError as sns_e:
-                            print(f"Error sending SNS reminder: {sns_e.response['Error']['Message']}")
-
-                except ValueError:
+                except (ValueError, TypeError):
                     pass  # Invalid date/time format
-        
-        student_bookings.sort(key=lambda x: x["created_at"], reverse=True)
-        student_payments.sort(key=lambda x: x["date"], reverse=True)
-        notifications.sort(key=lambda x: x["date"], reverse=True)
-        
-        return {
-            "bookings": student_bookings,
-            "payments": student_payments,
-            "notifications": notifications
-        }
-    except ClientError as e:
-        raise HTTPException(status_code=500, detail=f"Database error fetching student data: {e.response['Error']['Message']}")
+        except (ValueError, TypeError):
+            pass  # Invalid datetime format
+    
+    formatted_bookings.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+    student_payments.sort(key=lambda x: x.get("date", ""), reverse=True)
+    notifications.sort(key=lambda x: x.get("date", ""), reverse=True)
+    
+    return {
+        "bookings": formatted_bookings,
+        "payments": student_payments,
+        "notifications": notifications
+    }
 
 # Utility routes
 @app.get("/logout")
@@ -724,14 +751,218 @@ async def logout():
 # Health check endpoint
 @app.get("/health")
 async def health_check():
-    # Attempt to access a DynamoDB table to verify connectivity
-    try:
-        users_table.name # Simple way to trigger a connection test
-        db_status = "connected"
-    except ClientError as e:
-        db_status = f"error: {e.response['Error']['Message']}"
+    health_status = {
+        "status": "healthy",
+        "tutors_count": len(tutors_data),
+        "aws_services": {
+            "dynamodb": dynamodb is not None,
+            "sns": sns_client is not None
+        },
+        "timestamp": datetime.now().isoformat()
+    }
     
-    return {"status": "healthy", "tutors_count": len(tutors_data), "database_status": db_status}
+    # Test DynamoDB connection
+    if dynamodb:
+        try:
+            # Test each table
+            bookings_table.table_status
+            payments_table.table_status
+            tutors_table.table_status
+            users_table.table_status
+            health_status["dynamodb_tables"] = "accessible"
+        except Exception as e:
+            health_status["dynamodb_tables"] = f"error: {str(e)}"
+            health_status["status"] = "degraded"
+    
+    # Test SNS connection
+    if sns_client:
+        try:
+            sns_client.get_topic_attributes(TopicArn=SNS_TOPIC_ARN)
+            health_status["sns_topic"] = "accessible"
+        except Exception as e:
+            health_status["sns_topic"] = f"error: {str(e)}"
+            health_status["status"] = "degraded"
+    
+    return health_status
+
+# Admin endpoints for managing data
+@app.get("/admin/sync-tutors")
+async def sync_tutors_to_db():
+    """Sync local tutors data to DynamoDB"""
+    if not tutors_table:
+        return {"error": "DynamoDB not available"}
+    
+    synced_count = 0
+    errors = []
+    
+    for tutor_id, tutor_data in tutors_data.items():
+        try:
+            tutor_item = {
+                'tutor_id': tutor_id,
+                **tutor_data,
+                'updated_at': datetime.now().isoformat()
+            }
+            tutors_table.put_item(Item=tutor_item)
+            synced_count += 1
+        except Exception as e:
+            errors.append(f"Error syncing {tutor_id}: {str(e)}")
+    
+    return {
+        "synced_count": synced_count,
+        "total_tutors": len(tutors_data),
+        "errors": errors
+    }
+
+@app.get("/admin/stats")
+async def get_admin_stats():
+    """Get admin statistics"""
+    stats = {
+        "local_data": {
+            "tutors": len(tutors_data),
+            "users": len(users),
+            "bookings": len(bookings),
+            "payments": len(payments)
+        }
+    }
+    
+    # Get DynamoDB stats if available
+    if dynamodb:
+        try:
+            # Get table item counts (approximate)
+            tables_info = {}
+            for table_name, table in [
+                ("bookings", bookings_table),
+                ("payments", payments_table),
+                ("tutors", tutors_table),
+                ("users", users_table)
+            ]:
+                try:
+                    response = table.describe_table()
+                    tables_info[table_name] = {
+                        "status": response['Table']['TableStatus'],
+                        "item_count": response['Table'].get('ItemCount', 0)
+                    }
+                except Exception as e:
+                    tables_info[table_name] = {"error": str(e)}
+            
+            stats["dynamodb_tables"] = tables_info
+        except Exception as e:
+            stats["dynamodb_error"] = str(e)
+    
+    return stats
+
+# Additional utility functions
+async def cleanup_expired_sessions():
+    """Clean up expired booking sessions (can be called by a scheduled job)"""
+    if not bookings_table:
+        return {"message": "DynamoDB not available"}
+    
+    try:
+        # Get all pending bookings older than 1 hour
+        current_time = datetime.now()
+        cutoff_time = current_time - timedelta(hours=1)
+        
+        response = bookings_table.scan(
+            FilterExpression="attribute_exists(created_at) AND #status = :status",
+            ExpressionAttributeNames={"#status": "status"},
+            ExpressionAttributeValues={":status": "pending_payment"}
+        )
+        
+        expired_count = 0
+        for item in response.get('Items', []):
+            try:
+                created_at = datetime.fromisoformat(item['created_at'])
+                if created_at < cutoff_time:
+                    # Update status to expired
+                    bookings_table.update_item(
+                        Key={'booking_id': item['booking_id']},
+                        UpdateExpression="SET #status = :expired_status",
+                        ExpressionAttributeNames={"#status": "status"},
+                        ExpressionAttributeValues={":expired_status": "expired"}
+                    )
+                    expired_count += 1
+            except (ValueError, KeyError):
+                continue
+        
+        return {"expired_bookings": expired_count}
+    except Exception as e:
+        logger.error(f"Error cleaning up expired sessions: {e}")
+        return {"error": str(e)}
+
+@app.get("/admin/cleanup-expired")
+async def cleanup_expired_bookings():
+    """Admin endpoint to clean up expired bookings"""
+    return await cleanup_expired_sessions()
+
+# Error handlers
+@app.exception_handler(404)
+async def not_found_handler(request: Request, exc: HTTPException):
+    return HTMLResponse(
+        content="""
+        <html>
+            <head><title>Page Not Found - TutorMatch</title></head>
+            <body>
+                <h1>Page Not Found</h1>
+                <p>The page you're looking for doesn't exist.</p>
+                <p><a href="/">Go back to homepage</a></p>
+            </body>
+        </html>
+        """,
+        status_code=404
+    )
+
+@app.exception_handler(500)
+async def internal_error_handler(request: Request, exc: HTTPException):
+    return HTMLResponse(
+        content="""
+        <html>
+            <head><title>Server Error - TutorMatch</title></head>
+            <body>
+                <h1>Server Error</h1>
+                <p>Something went wrong. Please try again later.</p>
+                <p><a href="/">Go back to homepage</a></p>
+            </body>
+        </html>
+        """,
+        status_code=500
+    )
+
+# Startup event
+@app.on_event("startup")
+async def startup_event():
+    logger.info("TutorMatch application starting up...")
+    logger.info(f"AWS Region: {AWS_REGION}")
+    logger.info(f"SNS Topic ARN: {SNS_TOPIC_ARN}")
+    logger.info(f"DynamoDB available: {dynamodb is not None}")
+    logger.info(f"SNS available: {sns_client is not None}")
+    
+    # Send startup notification
+    await send_sns_notification(
+        "TutorMatch application has started successfully on EC2.",
+        "TutorMatch Startup Notification"
+    )
+
+# Shutdown event
+@app.on_event("shutdown")
+async def shutdown_event():
+    logger.info("TutorMatch application shutting down...")
+    
+    # Send shutdown notification
+    await send_sns_notification(
+        "TutorMatch application is shutting down.",
+        "TutorMatch Shutdown Notification"
+    )
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    # Configuration for production deployment
+    port = int(os.getenv('PORT', 8000))
+    host = os.getenv('HOST', '0.0.0.0')
+    
+    logger.info(f"Starting server on {host}:{port}")
+    uvicorn.run(
+        app, 
+        host=host, 
+        port=port,
+        log_level="info",
+        access_log=True
+    )
