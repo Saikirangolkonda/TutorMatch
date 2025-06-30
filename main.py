@@ -19,12 +19,12 @@ payments_table = dynamodb.Table("Payments_Table")
 SNS_TOPIC_ARN = "arn:aws:sns:ap-south-1:686255965861:TutorBookingTopic"
 
 # Load Tutors
+tutors_data = {}
 try:
     response = tutors_table.scan()
     tutors_data = {item["tutor_id"]: item for item in response.get("Items", [])}
 except Exception as e:
     print(f"Error loading tutors: {e}")
-    tutors_data = {}
 
 @app.route("/")
 def homepage():
@@ -115,7 +115,7 @@ def book_session(tutor_id):
     }
 
     try:
-        print("Booking:", booking)
+        print("Putting booking:", booking)
         bookings_table.put_item(Item=booking)
     except ClientError as e:
         print("Booking error:", e)
@@ -153,7 +153,10 @@ def process_payment():
             "created_at": datetime.now().isoformat()
         }
 
+        print("Putting payment:", payment_item)
         payments_table.put_item(Item=payment_item)
+
+        print("Updating booking status to confirmed")
         bookings_table.update_item(
             Key={"booking_id": booking_id},
             UpdateExpression="SET #s = :status, payment_id = :pid",
@@ -161,6 +164,7 @@ def process_payment():
             ExpressionAttributeValues={":status": "confirmed", ":pid": payment_id}
         )
 
+        print("Publishing SNS notification")
         sns.publish(
             TopicArn=SNS_TOPIC_ARN,
             Subject="New Booking Confirmed",
