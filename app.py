@@ -1,34 +1,35 @@
 from flask import Flask, render_template, request, redirect, url_for, jsonify, abort
-from datetime import datetime
 import boto3
-import uuid
-import json
-import os
+from datetime import datetime, timedelta
+import os, uuid
 
 app = Flask(__name__)
 app.secret_key = 'your-secret-key'
 
-# AWS config
+# AWS clients
 dynamodb = boto3.resource('dynamodb', region_name='ap-south-1')
 sns_client = boto3.client('sns', region_name='ap-south-1')
+
 SNS_TOPIC_ARN = "arn:aws:sns:ap-south-1:686255965861:TutorMatchNotifications"
 
-# DynamoDB tables
+# DynamoDB Tables
 users_table = dynamodb.Table('Users')
 tutors_table = dynamodb.Table('Tutors')
 bookings_table = dynamodb.Table('Bookings')
 payments_table = dynamodb.Table('Payments')
 
-# Load local tutors JSON
+# Load sample tutors from local JSON (for demo purpose)
 TUTORS_FILE = os.path.join("templates", "tutors_data.json")
-tutors_data = {}
 if os.path.exists(TUTORS_FILE):
     with open(TUTORS_FILE) as f:
         tutors_data = json.load(f)
+else:
+    tutors_data = {}
 
 @app.route('/')
 def homepage():
-    return render_template("homepage.html")
+    return render_template("homepage.html") if os.path.exists("templates/homepage.html") else \
+        "<h1>Welcome to TutorMatch</h1><a href='/login'>Login</a> | <a href='/register'>Register</a>"
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -39,7 +40,13 @@ def login():
         if user and user.get("password") == password:
             return redirect(url_for('student_dashboard'))
         return "Invalid credentials", 401
-    return render_template("login.html")
+    return render_template("login.html") if os.path.exists("templates/login.html") else '''
+        <h1>Login</h1>
+        <form method="post">
+            Email: <input name="email"><br>
+            Password: <input name="password"><br>
+            <button type="submit">Login</button>
+        </form>'''
 
 @app.route('/register', methods=['GET', 'POST'])
 def register():
@@ -52,23 +59,35 @@ def register():
             return redirect(url_for('login'))
         except Exception as e:
             return f"Error: {str(e)}"
-    return render_template("register.html")
+    return render_template("register.html") if os.path.exists("templates/register.html") else '''
+        <h1>Register</h1>
+        <form method="post">
+            Name: <input name="name"><br>
+            Email: <input name="email"><br>
+            Password: <input name="password"><br>
+            <button type="submit">Register</button>
+        </form>'''
 
 @app.route('/student-dashboard')
 def student_dashboard():
-    return render_template("student_dashboard.html")
+    return render_template("student_dashboard.html") if os.path.exists("templates/student_dashboard.html") else \
+        "<h1>Student Dashboard</h1><a href='/tutor-search'>Search Tutors</a>"
 
 @app.route('/tutor-search')
 def tutor_search():
     tutors_with_id = [{"id": k, **v} for k, v in tutors_data.items()]
-    return render_template("tutor_search.html", tutors_with_id=tutors_with_id)
+    return render_template("tutor_search.html", tutors_with_id=tutors_with_id) \
+        if os.path.exists("templates/tutor_search.html") else \
+        "".join([f"<h3>{t['name']}</h3><a href='/tutor-profile/{tid}'>View</a><hr>" for tid, t in tutors_data.items()])
 
 @app.route('/tutor-profile/<tutor_id>')
 def tutor_profile(tutor_id):
     tutor = tutors_data.get(tutor_id)
     if not tutor:
         abort(404)
-    return render_template("tutor_profile.html", tutor=tutor, tutor_id=tutor_id)
+    return render_template("tutor_profile.html", tutor=tutor, tutor_id=tutor_id) \
+        if os.path.exists("templates/tutor_profile.html") else \
+        f"<h1>{tutor['name']}</h1><a href='/book-session/{tutor_id}'>Book</a>"
 
 @app.route('/book-session/<tutor_id>', methods=['GET', 'POST'])
 def book_session(tutor_id):
@@ -102,11 +121,12 @@ def payment():
     booking = bookings_table.get_item(Key={"booking_id": booking_id}).get("Item")
     if not booking:
         abort(404)
-    return render_template("payment.html", booking=booking)
+    return render_template("payment.html", booking=booking, booking_id=booking_id)
 
 @app.route('/process-payment', methods=['POST'])
 def process_payment():
     booking_id = request.form['booking_id']
+    email = request.form['email']
     payment_id = str(uuid.uuid4())
     booking = bookings_table.get_item(Key={'booking_id': booking_id}).get("Item")
 
@@ -127,6 +147,7 @@ def process_payment():
         ExpressionAttributeValues={":s": "confirmed", ":p": payment_id}
     )
 
+    # Send SNS email notification
     try:
         sns_client.publish(
             TopicArn=SNS_TOPIC_ARN,
@@ -149,4 +170,4 @@ def health():
     return jsonify({"status": "healthy"})
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(host="0.0.0.0", port=5000, debug=True)
