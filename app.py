@@ -8,10 +8,14 @@ import json
 app = Flask(__name__)
 app.secret_key = 'your-secret-key'
 
-# AWS Setup
-region_name = 'us-east-1'
-dynamodb = boto3.resource('dynamodb', region_name=region_name)
-sns = boto3.client('sns', region_name='ap-south-1')
+# AWS Region (Mumbai)
+region = 'ap-south-1'
+
+# AWS Clients
+dynamodb = boto3.resource('dynamodb', region_name=region)
+sns = boto3.client('sns', region_name=region)
+
+# SNS Topic
 sns_topic_arn = 'arn:aws:sns:ap-south-1:686255965861:TutorMatchNotifications'
 
 # DynamoDB Tables
@@ -20,7 +24,7 @@ bookings_table = dynamodb.Table('Bookings')
 payments_table = dynamodb.Table('Payments')
 tutors_table = dynamodb.Table('Tutors')
 
-# Load fallback tutor data from local file
+# Local fallback tutor data
 TUTORS_FILE = os.path.join("templates", "tutors_data.json")
 if os.path.exists(TUTORS_FILE):
     with open(TUTORS_FILE) as f:
@@ -54,7 +58,11 @@ def register():
         password = request.form['password']
         name = request.form['name']
         try:
-            users_table.put_item(Item={'email': email, 'password': password, 'name': name})
+            users_table.put_item(Item={
+                'email': email,
+                'password': password,
+                'name': name
+            })
             return redirect(url_for('login'))
         except Exception as e:
             print("DynamoDB Register Error:", e)
@@ -69,10 +77,10 @@ def student_dashboard():
 def tutor_search():
     try:
         response = tutors_table.scan()
-        tutor_list = response.get('Items', [])
+        tutors = response.get('Items', [])
     except:
-        tutor_list = [{"id": k, **v} for k, v in tutors_data.items()]
-    return render_template("tutor_search.html", tutors_with_id=tutor_list)
+        tutors = [{"id": k, **v} for k, v in tutors_data.items()]
+    return render_template("tutor_search.html", tutors_with_id=tutors)
 
 @app.route('/tutor-profile/<tutor_id>')
 def tutor_profile(tutor_id):
@@ -92,21 +100,21 @@ def book_session(tutor_id):
 
     if request.method == 'POST':
         booking_id = str(uuid.uuid4())
-        booking = {
-            "booking_id": booking_id,
-            "tutor_id": tutor_id,
-            "date": request.form['date'],
-            "time": request.form['time'],
-            "subject": request.form['subject'],
-            "session_type": request.form.get('session_type', 'Single Session'),
-            "sessions_count": int(request.form.get('sessions_count', 1)),
-            "total_price": tutor.get('rate', 25) * int(request.form.get('sessions_count', 1)),
-            "learning_goals": request.form.get('learning_goals', ''),
-            "session_format": request.form.get('session_format', 'Online Video Call'),
-            "status": "pending_payment",
-            "created_at": datetime.utcnow().isoformat()
-        }
         try:
+            booking = {
+                "booking_id": booking_id,
+                "tutor_id": tutor_id,
+                "date": request.form['date'],
+                "time": request.form['time'],
+                "subject": request.form['subject'],
+                "session_type": request.form.get('session_type', 'Single Session'),
+                "sessions_count": int(request.form.get('sessions_count', 1)),
+                "total_price": tutor.get('rate', 25) * int(request.form.get('sessions_count', 1)),
+                "learning_goals": request.form.get('learning_goals', ''),
+                "session_format": request.form.get('session_format', 'Online Video Call'),
+                "status": "pending_payment",
+                "created_at": datetime.utcnow().isoformat()
+            }
             bookings_table.put_item(Item=booking)
             return redirect(url_for("payment", booking_id=booking_id))
         except Exception as e:
@@ -154,10 +162,9 @@ def process_payment():
         booking['payment_id'] = payment_id
         bookings_table.put_item(Item=booking)
 
-        message = f"Session with Tutor {booking['tutor_id']} confirmed on {booking['date']} at {booking['time']}."
         sns.publish(
             TopicArn=sns_topic_arn,
-            Message=message,
+            Message=f"Your session with Tutor {booking['tutor_id']} is confirmed for {booking['date']} at {booking['time']}.",
             Subject="TutorMatch Session Confirmed"
         )
 
@@ -182,22 +189,17 @@ def confirmation():
 @app.route('/api/student-data')
 def student_data():
     try:
-        bookings_resp = bookings_table.scan()
-        payments_resp = payments_table.scan()
-        student_bookings = bookings_resp.get('Items', [])
-        student_payments = payments_resp.get('Items', [])
-        notifications = [
-            {
-                "type": "success",
-                "title": "Session Confirmed",
-                "message": f"Your session with Tutor {b['tutor_id']} is confirmed.",
-                "date": datetime.utcnow().strftime("%Y-%m-%d")
-            }
-            for b in student_bookings if b['status'] == 'confirmed'
-        ]
+        bookings = bookings_table.scan().get('Items', [])
+        payments = payments_table.scan().get('Items', [])
+        notifications = [{
+            "type": "success",
+            "title": "Session Confirmed",
+            "message": f"Session with Tutor {b['tutor_id']} confirmed.",
+            "date": datetime.utcnow().strftime("%Y-%m-%d")
+        } for b in bookings if b['status'] == 'confirmed']
         return jsonify({
-            "bookings": student_bookings,
-            "payments": student_payments,
+            "bookings": bookings,
+            "payments": payments,
             "notifications": notifications
         })
     except Exception as e:
