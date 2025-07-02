@@ -1,36 +1,228 @@
-# TutorMatch AWS-Compatible Flask App with DynamoDB and SNS Integration
-
-from flask import Flask, request, render_template_string, redirect, url_for, jsonify, abort
+from flask import Flask, render_template, request, redirect, url_for, jsonify, abort
 from datetime import datetime, timedelta
 import boto3
+import json
 import uuid
 import os
+from botocore.exceptions import ClientError
 
 app = Flask(__name__)
-app.secret_key = 'your-secret-key-here'  # Change in production
+app.secret_key = 'your-secret-key'
 
 # AWS Configuration
-region_name = 'ap-south-1'
-dynamodb = boto3.resource('dynamodb', region_name=region_name)
-sns = boto3.client('sns', region_name=region_name)
-
-# DynamoDB Tables
-tables = {
-    'users': dynamodb.Table('Users'),
-    'tutors': dynamodb.Table('Tutors'),
-    'bookings': dynamodb.Table('Bookings'),
-    'payments': dynamodb.Table('Payments')
-}
-
-# SNS Topic ARN
+AWS_REGION = 'us-east-1'
 SNS_TOPIC_ARN = 'arn:aws:sns:ap-south-1:686255965861:TutorMatchNotifications'
+
+# Initialize AWS clients
+dynamodb = boto3.resource('dynamodb', region_name=AWS_REGION)
+sns = boto3.client('sns', region_name='ap-south-1')  # SNS is in ap-south-1
+
+# DynamoDB tables
+users_table = dynamodb.Table('Users')
+bookings_table = dynamodb.Table('Bookings')
+payments_table = dynamodb.Table('Payments')
+sessions_table = dynamodb.Table('Sessions')
+tutors_table = dynamodb.Table('Tutors')
+
+def initialize_tutors():
+    """Initialize default tutors in DynamoDB if they don't exist"""
+    default_tutors = {
+        "tutor1": {
+            "tutor_id": "tutor1",
+            "name": "John Smith",
+            "subjects": ["Mathematics", "Physics"],
+            "rate": 30,
+            "rating": 4.8,
+            "bio": "Experienced math and physics tutor with 5+ years of teaching experience.",
+            "availability": ["Monday 9-17", "Wednesday 9-17", "Friday 9-17"]
+        },
+        "tutor2": {
+            "tutor_id": "tutor2",
+            "name": "Sarah Johnson",
+            "subjects": ["English", "Literature"],
+            "rate": 25,
+            "rating": 4.6,
+            "bio": "English literature specialist, helping students excel in writing and analysis.",
+            "availability": ["Tuesday 10-18", "Thursday 10-18", "Saturday 9-15"]
+        }
+    }
+    
+    for tutor_id, tutor_data in default_tutors.items():
+        try:
+            tutors_table.put_item(
+                Item=tutor_data,
+                ConditionExpression='attribute_not_exists(tutor_id)'
+            )
+            print(f"Added tutor: {tutor_id}")
+        except ClientError as e:
+            if e.response['Error']['Code'] != 'ConditionalCheckFailedException':
+                print(f"Error adding tutor {tutor_id}: {e}")
+
+def get_all_tutors():
+    """Get all tutors from DynamoDB"""
+    try:
+        response = tutors_table.scan()
+        tutors = {}
+        for item in response['Items']:
+            tutors[item['tutor_id']] = item
+        return tutors
+    except ClientError as e:
+        print(f"Error getting tutors: {e}")
+        return {}
+
+def get_tutor(tutor_id):
+    """Get a specific tutor from DynamoDB"""
+    try:
+        response = tutors_table.get_item(Key={'tutor_id': tutor_id})
+        return response.get('Item')
+    except ClientError as e:
+        print(f"Error getting tutor {tutor_id}: {e}")
+        return None
+
+def get_user(email):
+    """Get user from DynamoDB"""
+    try:
+        response = users_table.get_item(Key={'email': email})
+        return response.get('Item')
+    except ClientError as e:
+        print(f"Error getting user {email}: {e}")
+        return None
+
+def create_user(email, password, name):
+    """Create a new user in DynamoDB"""
+    try:
+        users_table.put_item(
+            Item={
+                'email': email,
+                'password': password,
+                'name': name,
+                'created_at': datetime.now().isoformat()
+            }
+        )
+        return True
+    except ClientError as e:
+        print(f"Error creating user: {e}")
+        return False
+
+def create_booking(booking_data):
+    """Create a booking in DynamoDB"""
+    try:
+        bookings_table.put_item(Item=booking_data)
+        return True
+    except ClientError as e:
+        print(f"Error creating booking: {e}")
+        return False
+
+def get_booking(booking_id):
+    """Get booking from DynamoDB"""
+    try:
+        response = bookings_table.get_item(Key={'booking_id': booking_id})
+        return response.get('Item')
+    except ClientError as e:
+        print(f"Error getting booking {booking_id}: {e}")
+        return None
+
+def update_booking_status(booking_id, status, payment_id=None):
+    """Update booking status in DynamoDB"""
+    try:
+        update_expression = "SET #status = :status"
+        expression_attribute_names = {'#status': 'status'}
+        expression_attribute_values = {':status': status}
+        
+        if payment_id:
+            update_expression += ", payment_id = :payment_id"
+            expression_attribute_values[':payment_id'] = payment_id
+        
+        bookings_table.update_item(
+            Key={'booking_id': booking_id},
+            UpdateExpression=update_expression,
+            ExpressionAttributeNames=expression_attribute_names,
+            ExpressionAttributeValues=expression_attribute_values
+        )
+        return True
+    except ClientError as e:
+        print(f"Error updating booking: {e}")
+        return False
+
+def create_payment(payment_data):
+    """Create a payment record in DynamoDB"""
+    try:
+        payments_table.put_item(Item=payment_data)
+        return True
+    except ClientError as e:
+        print(f"Error creating payment: {e}")
+        return False
+
+def get_user_bookings(user_email):
+    """Get all bookings for a user"""
+    try:
+        response = bookings_table.scan(
+            FilterExpression='attribute_exists(user_email) AND user_email = :email',
+            ExpressionAttributeValues={':email': user_email}
+        )
+        return response.get('Items', [])
+    except ClientError as e:
+        print(f"Error getting user bookings: {e}")
+        return []
+
+def get_user_payments(user_email):
+    """Get all payments for a user"""
+    try:
+        response = payments_table.scan(
+            FilterExpression='attribute_exists(user_email) AND user_email = :email',
+            ExpressionAttributeValues={':email': user_email}
+        )
+        return response.get('Items', [])
+    except ClientError as e:
+        print(f"Error getting user payments: {e}")
+        return []
+
+def send_notification(subject, message, user_email=None):
+    """Send notification via SNS"""
+    try:
+        full_message = f"User: {user_email}\n{message}" if user_email else message
+        sns.publish(
+            TopicArn=SNS_TOPIC_ARN,
+            Subject=subject,
+            Message=full_message
+        )
+        print(f"Notification sent: {subject}")
+    except ClientError as e:
+        print(f"Error sending notification: {e}")
+
+# Initialize tutors on startup
+initialize_tutors()
 
 @app.route('/')
 def homepage():
-    return '''<h1>Welcome to TutorMatch</h1>
-              <a href="/login">Login</a> |
-              <a href="/register">Register</a> |
-              <a href="/tutor-search">Browse Tutors</a>'''
+    try:
+        return render_template("homepage.html")
+    except:
+        return """
+        <h1>Welcome to TutorMatch</h1>
+        <a href='/login'>Login</a> | <a href='/register'>Register</a>
+        """
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        email = request.form['email']
+        password = request.form['password']
+        user = get_user(email)
+        if user and user['password'] == password:
+            return redirect(url_for('student_dashboard'))
+        return "Invalid credentials", 401
+    try:
+        return render_template('login.html')
+    except:
+        return '''
+            <h1>Login</h1>
+            <form method="post">
+            Email: <input name="email"><br>
+            Password: <input name="password"><br>
+            <button type="submit">Login</button>
+            </form>
+        '''
 
 @app.route('/register', methods=['GET', 'POST'])
 def register():
@@ -38,201 +230,274 @@ def register():
         email = request.form['email']
         password = request.form['password']
         name = request.form['name']
-        try:
-            tables['users'].put_item(Item={
-                'email': email,
-                'password': password,
-                'name': name,
-                'role': 'student'
-            })
+        
+        if get_user(email):
+            return "User already exists", 400
+        
+        if create_user(email, password, name):
+            send_notification("New User Registration", f"New user registered: {name} ({email})")
             return redirect(url_for('login'))
-        except Exception as e:
-            return str(e), 500
-    return '''<form method="post">
-                Name: <input name="name"><br>
-                Email: <input name="email"><br>
-                Password: <input name="password"><br>
-                <button type="submit">Register</button>
-              </form>'''
+        else:
+            return "Registration failed", 500
+    
+    try:
+        return render_template('register.html')
+    except:
+        return '''
+            <h1>Register</h1>
+            <form method="post">
+            Name: <input name="name"><br>
+            Email: <input name="email"><br>
+            Password: <input name="password"><br>
+            <button type="submit">Register</button>
+            </form>
+        '''
 
-@app.route('/login', methods=['GET', 'POST'])
-def login():
-    if request.method == 'POST':
-        email = request.form['email']
-        password = request.form['password']
-        try:
-            response = tables['users'].get_item(Key={'email': email})
-            user = response.get('Item')
-            if user and user['password'] == password:
-                return redirect(url_for('dashboard', email=email))
-            else:
-                return 'Invalid credentials', 401
-        except Exception as e:
-            return str(e), 500
-    return '''<form method="post">
-                Email: <input name="email"><br>
-                Password: <input name="password"><br>
-                <button type="submit">Login</button>
-              </form>'''
-
-@app.route('/dashboard')
-def dashboard():
-    return '''<h2>Dashboard</h2>
-              <a href="/tutor-search">Search Tutors</a>'''
+@app.route('/student-dashboard')
+def student_dashboard():
+    try:
+        return render_template("student_dashboard.html")
+    except:
+        return '''
+        <h1>Student Dashboard</h1>
+        <a href="/tutor-search">Search Tutors</a>
+        '''
 
 @app.route('/tutor-search')
 def tutor_search():
+    tutors_data = get_all_tutors()
     try:
-        response = tables['tutors'].scan()
-        tutors = response.get('Items', [])
-        html = '<h2>Available Tutors</h2>'
-        for tutor in tutors:
-            html += f'''<div>
-                        <h3>{tutor['name']}</h3>
-                        Subjects: {', '.join(tutor.get('subjects', []))}<br>
-                        <a href="/tutor/{tutor['tutor_id']}">View Profile</a>
-                      </div>'''
-        return html
-    except Exception as e:
-        return str(e), 500
+        tutors_with_id = [{"id": k, **v} for k, v in tutors_data.items()]
+        return render_template("tutor_search.html", tutors_with_id=tutors_with_id)
+    except:
+        html = ""
+        for tid, t in tutors_data.items():
+            html += f"<h3>{t['name']}</h3><a href='/tutor-profile/{tid}'>View Profile</a><hr>"
+        return f"<h1>Find Tutors</h1>{html}"
 
-@app.route('/tutor/<tutor_id>', methods=['GET', 'POST'])
+@app.route('/tutor-profile/<tutor_id>')
 def tutor_profile(tutor_id):
+    tutor = get_tutor(tutor_id)
+    if not tutor:
+        abort(404)
     try:
-        response = tables['tutors'].get_item(Key={'tutor_id': tutor_id})
-        tutor = response.get('Item')
-        if not tutor:
-            return 'Tutor not found', 404
+        return render_template("tutor_profile.html", tutor=tutor, tutor_id=tutor_id)
+    except:
+        return f"<h1>{tutor['name']}</h1><a href='/book-session/{tutor_id}'>Book Session</a>"
 
-        if request.method == 'POST':
-            date = request.form['date']
-            time = request.form['time']
-            subject = request.form['subject']
-            email = request.form['email']  # Get student email
-            booking_id = str(uuid.uuid4())
-            rate = int(tutor.get('rate', 25))
-            booking_item = {
-                'booking_id': booking_id,
-                'tutor_id': tutor_id,
-                'student_email': email,
-                'date': date,
-                'time': time,
-                'subject': subject,
-                'status': 'pending_payment',
-                'total_price': rate,
-                'created_at': datetime.now().isoformat()
-            }
-            tables['bookings'].put_item(Item=booking_item)
+@app.route('/book-session/<tutor_id>', methods=['GET', 'POST'])
+def book_session(tutor_id):
+    tutor = get_tutor(tutor_id)
+    if not tutor:
+        abort(404)
+    
+    if request.method == 'POST':
+        booking_id = str(uuid.uuid4())
+        date = request.form['date']
+        time = request.form['time']
+        subject = request.form['subject']
+        session_type = request.form.get('session_type', 'Single Session')
+        sessions_count = int(request.form.get('sessions_count', 1))
+        total_price = tutor.get('rate', 25) * sessions_count
+        learning_goals = request.form.get('learning_goals', '')
+        session_format = request.form.get('session_format', 'Online Video Call')
+        user_email = request.form.get('user_email', 'demo@example.com')  # You should get this from session
 
-            # Send notification
-            notify_upcoming_session(email, tutor['name'], subject, date, time, rate)
+        booking_data = {
+            "booking_id": booking_id,
+            "tutor_id": tutor_id,
+            "tutor_data": tutor,
+            "user_email": user_email,
+            "date": date,
+            "time": time,
+            "subject": subject,
+            "session_type": session_type,
+            "sessions_count": sessions_count,
+            "total_price": total_price,
+            "learning_goals": learning_goals,
+            "session_format": session_format,
+            "status": "pending_payment",
+            "created_at": datetime.now().isoformat()
+        }
+        
+        if create_booking(booking_data):
+            send_notification(
+                "New Booking Created", 
+                f"New booking created for {tutor['name']} on {date} at {time}",
+                user_email
+            )
+            return redirect(url_for("payment", booking_id=booking_id))
+        else:
+            return "Booking failed", 500
 
-            return redirect(url_for('payment', booking_id=booking_id))
-
-        return f'''<h2>{tutor['name']}</h2>
-                  Subjects: {', '.join(tutor.get('subjects', []))}<br>
-                  <form method="post">
-                    Email: <input name="email" required><br>
-                    Date: <input type="date" name="date"><br>
-                    Time: <input type="time" name="time"><br>
-                    Subject: <select name="subject">
-                        {''.join([f'<option value="{s}">{s}</option>' for s in tutor.get('subjects', [])])}
-                    </select><br>
-                    <button type="submit">Book</button>
-                  </form>'''
-    except Exception as e:
-        return str(e), 500
+    try:
+        return render_template("booksession.html", tutor=tutor, tutor_id=tutor_id)
+    except:
+        return f'''
+            <h1>Book Session with {tutor['name']}</h1>
+            <form method="post">
+            Date: <input name="date" type="date"><br>
+            Time: <input name="time" type="time"><br>
+            Subject: <input name="subject"><br>
+            User Email: <input name="user_email" type="email"><br>
+            <button type="submit">Book</button>
+            </form>
+        '''
 
 @app.route('/payment')
 def payment():
     booking_id = request.args.get('booking_id')
+    booking = get_booking(booking_id)
+    if not booking:
+        abort(404)
     try:
-        response = tables['bookings'].get_item(Key={'booking_id': booking_id})
-        booking = response.get('Item')
-        if not booking:
-            return 'Booking not found', 404
-        return f'''<h2>Payment for Booking {booking_id}</h2>
-                  Amount: ${booking['total_price']}<br>
-                  <form method="post" action="/process-payment">
-                    <input type="hidden" name="booking_id" value="{booking_id}">
-                    Payment Method: <input name="payment_method"><br>
-                    Email: <input name="email"><br>
-                    Phone: <input name="phone"><br>
-                    <button type="submit">Pay</button>
-                  </form>'''
-    except Exception as e:
-        return str(e), 500
+        return render_template("payment.html", booking=booking, booking_id=booking_id)
+    except:
+        return f'''
+            <h1>Pay ${booking['total_price']}</h1>
+            <form method='post' action='/process-payment'>
+                <input name='booking_id' value='{booking_id}' type='hidden'>
+                <input name='payment_method' placeholder='Payment Method'><br>
+                <input name='email' placeholder='Email' type='email'><br>
+                <input name='phone' placeholder='Phone'><br>
+                <button>Pay</button>
+            </form>
+        '''
 
 @app.route('/process-payment', methods=['POST'])
 def process_payment():
     booking_id = request.form['booking_id']
+    payment_method = request.form['payment_method']
     email = request.form['email']
     phone = request.form['phone']
-    method = request.form['payment_method']
+    
+    booking = get_booking(booking_id)
+    if not booking:
+        abort(404)
+    
     payment_id = str(uuid.uuid4())
-    try:
-        # Update booking
-        tables['bookings'].update_item(
-            Key={'booking_id': booking_id},
-            UpdateExpression="set #st=:s",
-            ExpressionAttributeNames={"#st": "status"},
-            ExpressionAttributeValues={":s": "confirmed"}
+    payment_data = {
+        "payment_id": payment_id,
+        "booking_id": booking_id,
+        "user_email": email,
+        "amount": booking["total_price"],
+        "payment_method": payment_method,
+        "phone": phone,
+        "status": "completed",
+        "created_at": datetime.now().isoformat()
+    }
+    
+    if create_payment(payment_data) and update_booking_status(booking_id, "confirmed", payment_id):
+        send_notification(
+            "Payment Successful", 
+            f"Payment of ${booking['total_price']} completed for booking {booking_id}",
+            email
         )
-
-        # Record payment
-        response = tables['bookings'].get_item(Key={'booking_id': booking_id})
-        booking = response['Item']
-        tables['payments'].put_item(Item={
-            'payment_id': payment_id,
-            'booking_id': booking_id,
-            'email': email,
-            'phone': phone,
-            'payment_method': method,
-            'amount': booking['total_price'],
-            'status': 'completed',
-            'created_at': datetime.now().isoformat()
-        })
-
         return redirect(url_for('confirmation', booking_id=booking_id))
-    except Exception as e:
-        return str(e), 500
+    else:
+        return "Payment processing failed", 500
 
 @app.route('/confirmation')
 def confirmation():
     booking_id = request.args.get('booking_id')
-    return f'<h2>Booking Confirmed!</h2><p>Booking ID: {booking_id}</p>'
+    booking = get_booking(booking_id)
+    if not booking:
+        abort(404)
+    try:
+        return render_template("confirmation.html", booking=booking)
+    except:
+        return f"<h1>Booking Confirmed</h1><p>Session with {booking['tutor_data']['name']} confirmed.</p>"
+
+@app.route('/api/student-data')
+def student_data():
+    user_email = request.args.get('email', 'demo@example.com')  # Should come from session
+    
+    student_bookings = []
+    student_payments = []
+    notifications = []
+    
+    # Get user bookings
+    bookings = get_user_bookings(user_email)
+    for b in bookings:
+        student_bookings.append({
+            "id": b["booking_id"],
+            "tutor_name": b["tutor_data"]["name"],
+            "subject": b["subject"],
+            "date": b["date"],
+            "time": b["time"],
+            "status": b["status"],
+            "total_price": b["total_price"],
+            "session_format": b["session_format"],
+            "created_at": b["created_at"]
+        })
+        
+        if b["status"] == "confirmed":
+            notifications.append({
+                "type": "success",
+                "title": "Session Confirmed",
+                "message": f"Your session with {b['tutor_data']['name']} is confirmed.",
+                "date": datetime.now().strftime("%Y-%m-%d")
+            })
+    
+    # Get user payments
+    payments = get_user_payments(user_email)
+    for p in payments:
+        student_payments.append({
+            "id": p["payment_id"],
+            "amount": p["amount"],
+            "status": p["status"],
+            "method": p["payment_method"],
+            "date": p["created_at"]
+        })
+    
+    return jsonify({
+        "bookings": student_bookings,
+        "payments": student_payments,
+        "notifications": notifications
+    })
+
+@app.route('/logout')
+def logout():
+    return redirect(url_for("homepage"))
 
 @app.route('/health')
 def health():
-    return jsonify({"status": "ok"})
-
-@app.route('/api/student-data')
-def api_student_data():
-    student_email = request.args.get('student_email')
-    if not student_email:
-        return jsonify({'error': 'Missing student_email'}), 400
-    response = tables['users'].get_item(Key={'email': student_email})
-    user = response.get('Item')
-    if not user:
-        return jsonify({'error': 'User not found'}), 404
-    return jsonify({'user': user})
-
-def notify_upcoming_session(email, tutor_name, subject, date, time, price):
-    message = f"Your session for {subject} with {tutor_name} is scheduled on {date} at {time}.\nTotal Fee: ${price}."
     try:
-        sns.publish(
-            TopicArn=SNS_TOPIC_ARN,
-            Message=message,
-            Subject="Upcoming Tutor Session Notification",
-            MessageAttributes={
-                'email': {
-                    'DataType': 'String',
-                    'StringValue': email
-                }
-            }
-        )
+        tutors_count = len(get_all_tutors())
+        return jsonify({
+            "status": "healthy",
+            "tutors_count": tutors_count,
+            "aws_region": AWS_REGION,
+            "dynamodb": "connected"
+        })
     except Exception as e:
-        print("SNS Error:", e)
+        return jsonify({
+            "status": "unhealthy",
+            "error": str(e)
+        }), 500
+
+@app.route('/admin/stats')
+def admin_stats():
+    """Admin endpoint to view system statistics"""
+    try:
+        tutors = get_all_tutors()
+        
+        # Get counts from DynamoDB
+        bookings_response = bookings_table.scan(Select='COUNT')
+        payments_response = payments_table.scan(Select='COUNT')
+        users_response = users_table.scan(Select='COUNT')
+        
+        stats = {
+            "tutors_count": len(tutors),
+            "bookings_count": bookings_response['Count'],
+            "payments_count": payments_response['Count'],
+            "users_count": users_response['Count'],
+            "aws_region": AWS_REGION
+        }
+        
+        return jsonify(stats)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    app.run(host='0.0.0.0', port=8000, debug=True)
