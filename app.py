@@ -131,7 +131,9 @@ def payment():
         booking = response.get("Item")
         if not booking:
             abort(404)
-        return render_template("payment.html", booking=booking, booking_id=booking_id)
+        tutor = tutors_data.get(booking["tutor_id"], {})
+return render_template("payment.html", booking=booking, booking_id=booking_id, tutor=tutor)
+
     except Exception as e:
         print("Payment Load Error:", e)
         abort(500)
