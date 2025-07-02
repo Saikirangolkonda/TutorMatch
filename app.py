@@ -38,7 +38,7 @@ def register():
         email = request.form['email']
         password = request.form['password']
         name = request.form['name']
-        role = request.form['role']
+        role = request.form['role'] if 'role' in request.form else 'student'
         try:
             users_table.put_item(Item={
                 'email': email,
@@ -62,20 +62,24 @@ def login():
             user = response.get('Item')
             if user and user['password'] == password:
                 session['user'] = user
-                return redirect(url_for('student_dashboard' if user['role'] == 'student' else 'tutor_dashboard'))
+                role = user.get('role', 'student')
+                return redirect(url_for('student_dashboard' if role == 'student' else 'tutor_dashboard'))
+            else:
+                return "Invalid credentials", 401
         except Exception as e:
             print("Login Error:", str(e))
+            return "Login failed"
     return render_template('login.html')
 
 @app.route('/student-dashboard')
 def student_dashboard():
-    if 'user' not in session or session['user']['role'] != 'student':
+    if 'user' not in session or session['user'].get('role') != 'student':
         return redirect(url_for('login'))
     return render_template('student_dashboard.html')
 
 @app.route('/tutor-dashboard')
 def tutor_dashboard():
-    if 'user' not in session or session['user']['role'] != 'tutor':
+    if 'user' not in session or session['user'].get('role') != 'tutor':
         return redirect(url_for('login'))
     return render_template('tutor_dashboard.html')
 
@@ -85,7 +89,7 @@ def tutor_search():
 
 @app.route('/book-session/<int:tutor_id>', methods=['GET', 'POST'])
 def book_session(tutor_id):
-    if 'user' not in session or session['user']['role'] != 'student':
+    if 'user' not in session or session['user'].get('role') != 'student':
         return redirect(url_for('login'))
 
     tutor = next((t for t in tutor_data if t['id'] == tutor_id), None)
