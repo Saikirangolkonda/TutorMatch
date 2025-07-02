@@ -1,26 +1,26 @@
 from flask import Flask, render_template, request, redirect, url_for, jsonify, abort
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
-import boto3
-import uuid
-import os
-import json
+import boto3, os, json, uuid
 
 app = Flask(__name__)
 app.secret_key = 'your-secret-key'
 
-# AWS config
-dynamodb = boto3.resource('dynamodb', region_name='ap-south-1')
-sns = boto3.client('sns', region_name='ap-south-1')
+# AWS setup
+region_name = 'ap-south-1'
+dynamodb = boto3.resource('dynamodb', region_name=region_name)
+sns = boto3.client('sns', region_name=region_name)
 sns_topic_arn = 'arn:aws:sns:ap-south-1:686255965861:TutorMatchNotifications'
 
+# DynamoDB Tables
 users_table = dynamodb.Table('Users')
 bookings_table = dynamodb.Table('Bookings')
 payments_table = dynamodb.Table('Payments')
+sessions_table = dynamodb.Table('Sessions')
 
-# Load tutors from local JSON
-TUTORS_FILE = os.path.join("templates", "tutors_data.json")
-with open(TUTORS_FILE) as f:
+# Load static tutor data from JSON
+tutors_file = os.path.join("templates", "tutors_data.json")
+with open(tutors_file) as f:
     tutors_data = json.load(f)
 
 @app.route('/')
@@ -33,14 +33,12 @@ def login():
         email = request.form['email']
         password = request.form['password']
         try:
-            response = users_table.get_item(Key={'email': email})
-            user = response.get('Item')
-            if user and user.get('password') == password:
+            user = users_table.get_item(Key={'email': email}).get('Item')
+            if user and user['password'] == password:
                 return redirect(url_for('student_dashboard', student_email=email))
-            return "Invalid credentials", 401
         except Exception as e:
-            print("Login Error:", e)
-            return "Internal server error", 500
+            print(f"Login Error: {e}")
+        return "Invalid credentials", 401
     return render_template("login.html")
 
 @app.route('/register', methods=['GET', 'POST'])
@@ -53,8 +51,8 @@ def register():
             users_table.put_item(Item={'email': email, 'password': password, 'name': name})
             return redirect(url_for('login'))
         except Exception as e:
-            print("DynamoDB Register Error:", e)
-            return "Registration failed", 500
+            print(f"DynamoDB Register Error: {e}")
+            return "Error registering user", 500
     return render_template("register.html")
 
 @app.route('/student-dashboard')
@@ -86,11 +84,11 @@ def book_session(tutor_id):
             subject = request.form['subject']
             session_type = request.form.get('session_type', 'Single Session')
             sessions_count = int(request.form.get('sessions_count', 1))
-            total_price = Decimal(str(tutor.get('rate', 25))) * sessions_count
+            total_price = Decimal(str(tutor['rate'])) * sessions_count
             learning_goals = request.form.get('learning_goals', '')
             session_format = request.form.get('session_format', 'Online Video Call')
 
-            booking_data = {
+            booking_item = {
                 "booking_id": booking_id,
                 "tutor_id": tutor_id,
                 "date": date,
@@ -98,142 +96,135 @@ def book_session(tutor_id):
                 "subject": subject,
                 "session_type": session_type,
                 "sessions_count": sessions_count,
-                "total_price": total_price,
+                "total_price": str(total_price),
                 "learning_goals": learning_goals,
                 "session_format": session_format,
                 "status": "pending_payment",
-                "created_at": datetime.now().isoformat()
+                "tutor_name": tutor['name'],
+                "created_at": datetime.utcnow().isoformat()
             }
-
-            bookings_table.put_item(Item=booking_data)
+            bookings_table.put_item(Item=booking_item)
             return redirect(url_for("payment", booking_id=booking_id))
         except Exception as e:
-            print("Booking Error:", e)
-            return "Booking failed", 500
-
+            print(f"Booking Error: {e}")
+            abort(500)
     return render_template("booksession.html", tutor=tutor, tutor_id=tutor_id)
 
 @app.route('/payment')
 def payment():
-    booking_id = request.args.get('booking_id')
     try:
-        response = bookings_table.get_item(Key={'booking_id': booking_id})
-        booking = response.get('Item')
+        booking_id = request.args.get('booking_id')
+        booking = bookings_table.get_item(Key={"booking_id": booking_id}).get("Item")
         if not booking:
             abort(404)
-        tutor = tutors_data.get(booking['tutor_id'], {})
-        return render_template("payment.html", booking=booking, booking_id=booking_id, tutor=tutor)
+        return render_template("payment.html", booking=booking, booking_id=booking_id)
     except Exception as e:
-        print("Payment Load Error:", e)
-        return "Error loading payment page", 500
+        print(f"Payment Load Error: {e}")
+        abort(500)
 
 @app.route('/process-payment', methods=['POST'])
 def process_payment():
-    booking_id = request.form['booking_id']
-    payment_method = request.form['payment_method']
-    email = request.form['email']
-    phone = request.form['phone']
-
     try:
-        response = bookings_table.get_item(Key={'booking_id': booking_id})
-        booking = response.get('Item')
+        booking_id = request.form['booking_id']
+        payment_method = request.form['payment_method']
+        email = request.form['email']
+        phone = request.form['phone']
+        booking = bookings_table.get_item(Key={'booking_id': booking_id}).get('Item')
         if not booking:
             abort(404)
 
         payment_id = str(uuid.uuid4())
-        payment_record = {
+        payments_table.put_item(Item={
             "payment_id": payment_id,
             "booking_id": booking_id,
-            "amount": Decimal(str(booking["total_price"])),
+            "amount": booking['total_price'],
             "payment_method": payment_method,
             "status": "completed",
-            "created_at": datetime.now().isoformat()
-        }
+            "created_at": datetime.utcnow().isoformat()
+        })
 
-        payments_table.put_item(Item=payment_record)
-
+        # Update booking with payment info
         bookings_table.update_item(
             Key={'booking_id': booking_id},
-            UpdateExpression="set #s = :s, payment_id = :p",
+            UpdateExpression="SET #s = :s, payment_id = :p",
             ExpressionAttributeNames={"#s": "status"},
             ExpressionAttributeValues={":s": "confirmed", ":p": payment_id}
         )
 
+        # Send notification
         sns.publish(
             TopicArn=sns_topic_arn,
-            Message=f"Session with tutor {booking['tutor_id']} confirmed for {booking['date']} at {booking['time']}.",
-            Subject="Session Confirmation"
+            Message=f"Session with {booking['tutor_name']} is confirmed on {booking['date']} at {booking['time']}.",
+            Subject="TutorMatch - Session Confirmed"
         )
 
         return redirect(url_for('confirmation', booking_id=booking_id))
     except Exception as e:
-        print("Payment Error:", e)
-        return "Payment processing failed", 500
+        print(f"Payment Error: {e}")
+        abort(500)
 
 @app.route('/confirmation')
 def confirmation():
-    booking_id = request.args.get('booking_id')
     try:
-        response = bookings_table.get_item(Key={'booking_id': booking_id})
-        booking = response.get('Item')
+        booking_id = request.args.get('booking_id')
+        booking = bookings_table.get_item(Key={"booking_id": booking_id}).get("Item")
         if not booking:
             abort(404)
-        tutor = tutors_data.get(booking['tutor_id'], {})
-        return render_template("confirmation.html", booking=booking, tutor=tutor)
+        return render_template("confirmation.html", booking=booking)
     except Exception as e:
-        print("Confirmation Error:", e)
-        return "Confirmation page failed", 500
+        print(f"Confirmation Load Error: {e}")
+        abort(500)
 
 @app.route('/api/student-data')
 def student_data():
-    student_email = request.args.get('student_email')
+    email = request.args.get("student_email")
     try:
-        all_bookings = bookings_table.scan().get("Items", [])
-        all_payments = payments_table.scan().get("Items", [])
-
-        student_bookings = []
-        student_payments = []
+        response = bookings_table.scan()
+        items = response.get("Items", [])
+        bookings_list = []
+        payments_list = []
         notifications = []
 
-        for b in all_bookings:
-            if b.get("status") == "confirmed":
-                tutor = tutors_data.get(b["tutor_id"], {})
-                student_bookings.append({
-                    "id": b["booking_id"],
-                    "tutor_name": tutor.get("name", "Unknown"),
-                    "subject": b["subject"],
-                    "date": b["date"],
-                    "time": b["time"],
-                    "status": b["status"],
-                    "total_price": str(b["total_price"]),
-                    "session_format": b["session_format"],
-                    "created_at": b["created_at"]
-                })
+        for b in items:
+            if 'tutor_name' not in b:
+                continue
+            bookings_list.append({
+                "id": b["booking_id"],
+                "tutor_name": b["tutor_name"],
+                "subject": b["subject"],
+                "date": b["date"],
+                "time": b["time"],
+                "status": b["status"],
+                "total_price": b["total_price"],
+                "session_format": b["session_format"],
+                "created_at": b["created_at"]
+            })
+            if "payment_id" in b:
+                pay = payments_table.get_item(Key={"payment_id": b["payment_id"]}).get("Item")
+                if pay:
+                    payments_list.append({
+                        "id": pay["payment_id"],
+                        "amount": pay["amount"],
+                        "status": pay["status"],
+                        "method": pay["payment_method"],
+                        "date": pay["created_at"]
+                    })
+            if b["status"] == "confirmed":
                 notifications.append({
                     "type": "success",
                     "title": "Session Confirmed",
-                    "message": f"Your session with {tutor.get('name', 'Tutor')} is confirmed.",
-                    "date": datetime.now().strftime("%Y-%m-%d")
+                    "message": f"Your session with {b['tutor_name']} is confirmed.",
+                    "date": datetime.utcnow().strftime("%Y-%m-%d")
                 })
 
-        for p in all_payments:
-            student_payments.append({
-                "id": p["payment_id"],
-                "amount": str(p["amount"]),
-                "status": p["status"],
-                "method": p["payment_method"],
-                "date": p["created_at"]
-            })
-
         return jsonify({
-            "bookings": student_bookings,
-            "payments": student_payments,
+            "bookings": bookings_list,
+            "payments": payments_list,
             "notifications": notifications
         })
-
     except Exception as e:
-        print("Student Data Error:", e)
-        return jsonify({"error": "Unable to load student data"}), 500
+        print(f"Data API Error: {e}")
+        return jsonify({"error": "Could not load data"}), 500
 
 @app.route('/logout')
 def logout():
