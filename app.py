@@ -2,12 +2,17 @@ from flask import Flask, render_template, request, redirect, url_for, jsonify, a
 from datetime import datetime, timedelta
 import os, json, uuid, boto3
 from botocore.exceptions import ClientError
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-app.secret_key = os.environ.get('SECRET_KEY', 'your-secret-key')
+app.secret_key = os.environ.get('SECRET_KEY', 'your-secret-key-change-in-production')
 
 # AWS Configuration
-AWS_REGION = os.environ.get('AWS_REGION', 'ap-south-1')
+AWS_REGION = os.environ.get('AWS_REGION', 'ap-south-1')  # Mumbai region
 SNS_TOPIC_ARN = os.environ.get('SNS_TOPIC_ARN', 'arn:aws:sns:ap-south-1:686255965861:TutorMatchNotifications')
 
 # Initialize AWS clients
@@ -21,89 +26,134 @@ try:
     bookings_table = dynamodb.Table('Bookings')
     payments_table = dynamodb.Table('Payments')
     sessions_table = dynamodb.Table('Sessions')
-except:
-    # Fallback for local development
+    
+    logger.info("AWS services initialized successfully")
+except Exception as e:
+    logger.error(f"Failed to initialize AWS services: {str(e)}")
+    # Fallback to local development
     dynamodb = None
     sns_client = None
 
-# Default tutor data and in-memory storage for fallback
-tutors_data = {
-    "tutor1": {
-        "name": "John Smith",
-        "subjects": ["Mathematics", "Physics"],
-        "rate": 30,
-        "rating": 4.8,
-        "bio": "Experienced math and physics tutor with 5+ years of teaching experience.",
-        "availability": ["Monday 9-17", "Wednesday 9-17", "Friday 9-17"]
-    },
-    "tutor2": {
-        "name": "Sarah Johnson",
-        "subjects": ["English", "Literature"],
-        "rate": 25,
-        "rating": 4.6,
-        "bio": "English literature specialist, helping students excel in writing and analysis.",
-        "availability": ["Tuesday 10-18", "Thursday 10-18", "Saturday 9-15"]
-    }
-}
-
-users = {}
-bookings = {}
-payments = {}
-
-# Initialize default tutors in DynamoDB
+# Initialize default tutor data in DynamoDB
 def initialize_tutors():
+    """Initialize default tutors in DynamoDB if they don't exist"""
     if not dynamodb:
         return
+    
+    default_tutors = [
+        {
+            "tutor_id": "tutor1",
+            "name": "John Smith",
+            "subjects": ["Mathematics", "Physics"],
+            "rate": 30,
+            "rating": 4.8,
+            "bio": "Experienced math and physics tutor with 5+ years of teaching experience.",
+            "availability": ["Monday 9-17", "Wednesday 9-17", "Friday 9-17"],
+            "email": "john.smith@tutormatch.com",
+            "phone": "+91-9876543210",
+            "created_at": datetime.now().isoformat()
+        },
+        {
+            "tutor_id": "tutor2",
+            "name": "Sarah Johnson",
+            "subjects": ["English", "Literature"],
+            "rate": 25,
+            "rating": 4.6,
+            "bio": "English literature specialist, helping students excel in writing and analysis.",
+            "availability": ["Tuesday 10-18", "Thursday 10-18", "Saturday 9-15"],
+            "email": "sarah.johnson@tutormatch.com",
+            "phone": "+91-9876543211",
+            "created_at": datetime.now().isoformat()
+        }
+    ]
+    
     try:
-        for tid, tutor in tutors_data.items():
-            tutor_data = tutor.copy()
-            tutor_data['tutor_id'] = tid
-            tutor_data['created_at'] = datetime.now().isoformat()
-            tutors_table.put_item(Item=tutor_data, ConditionExpression='attribute_not_exists(tutor_id)')
-    except:
-        pass
+        for tutor in default_tutors:
+            tutors_table.put_item(
+                Item=tutor,
+                ConditionExpression='attribute_not_exists(tutor_id)'
+            )
+        logger.info("Default tutors initialized in DynamoDB")
+    except ClientError as e:
+        if e.response['Error']['Code'] != 'ConditionalCheckFailedException':
+            logger.error(f"Error initializing tutors: {str(e)}")
 
-def send_notification(email, subject, message):
+# Initialize tutors on startup
+if dynamodb:
+    initialize_tutors()
+
+def send_notification(email, subject, message, notification_type="general"):
+    """Send email notification via SNS"""
     if not sns_client:
+        logger.warning("SNS client not available, skipping notification")
         return False
+    
     try:
+        # Create message with email-specific formatting
         sns_message = {
             "default": message,
             "email": f"Subject: {subject}\n\n{message}"
         }
-        sns_client.publish(
+        
+        # Publish to SNS topic
+        response = sns_client.publish(
             TopicArn=SNS_TOPIC_ARN,
             Message=json.dumps(sns_message),
             Subject=subject,
             MessageStructure='json'
         )
+        
+        logger.info(f"Notification sent successfully. MessageId: {response['MessageId']}")
         return True
-    except:
+    except ClientError as e:
+        logger.error(f"Failed to send notification: {str(e)}")
         return False
 
 def get_all_tutors():
+    """Get all tutors from DynamoDB"""
     if not dynamodb:
-        return tutors_data
+        # Fallback data for local development
+        return {
+            "tutor1": {
+                "name": "John Smith",
+                "subjects": ["Mathematics", "Physics"],
+                "rate": 30,
+                "rating": 4.8,
+                "bio": "Experienced math and physics tutor with 5+ years of teaching experience.",
+                "availability": ["Monday 9-17", "Wednesday 9-17", "Friday 9-17"]
+            },
+            "tutor2": {
+                "name": "Sarah Johnson",
+                "subjects": ["English", "Literature"],
+                "rate": 25,
+                "rating": 4.6,
+                "bio": "English literature specialist, helping students excel in writing and analysis.",
+                "availability": ["Tuesday 10-18", "Thursday 10-18", "Saturday 9-15"]
+            }
+        }
+    
     try:
         response = tutors_table.scan()
         tutors = {}
         for item in response['Items']:
             tutors[item['tutor_id']] = item
-        return tutors if tutors else tutors_data
-    except:
-        return tutors_data
+        return tutors
+    except ClientError as e:
+        logger.error(f"Error fetching tutors: {str(e)}")
+        return {}
 
 def get_tutor(tutor_id):
+    """Get specific tutor from DynamoDB"""
     if not dynamodb:
-        return tutors_data.get(tutor_id)
+        all_tutors = get_all_tutors()
+        return all_tutors.get(tutor_id)
+    
     try:
         response = tutors_table.get_item(Key={'tutor_id': tutor_id})
-        return response.get('Item', tutors_data.get(tutor_id))
-    except:
-        return tutors_data.get(tutor_id)
-
-# Initialize tutors on startup
-initialize_tutors()
+        return response.get('Item')
+    except ClientError as e:
+        logger.error(f"Error fetching tutor {tutor_id}: {str(e)}")
+        return None
 
 @app.route('/')
 def homepage():
@@ -112,6 +162,7 @@ def homepage():
     except:
         return """
         <h1>Welcome to TutorMatch</h1>
+        <p>Find the perfect tutor for your learning needs!</p>
         <a href='/login'>Login</a> | <a href='/register'>Register</a>
         """
 
@@ -127,11 +178,8 @@ def login():
                 user = response.get('Item')
                 if user and user['password'] == password:
                     return redirect(url_for('student_dashboard'))
-            except:
-                pass
-        else:
-            if email in users and users[email]['password'] == password:
-                return redirect(url_for('student_dashboard'))
+            except ClientError as e:
+                logger.error(f"Login error: {str(e)}")
         
         return "Invalid credentials", 401
     
@@ -141,10 +189,11 @@ def login():
         return '''
             <h1>Login</h1>
             <form method="post">
-            Email: <input name="email"><br>
-            Password: <input name="password"><br>
+            Email: <input name="email" type="email" required><br><br>
+            Password: <input name="password" type="password" required><br><br>
             <button type="submit">Login</button>
             </form>
+            <p><a href="/register">Don't have an account? Register here</a></p>
         '''
 
 @app.route('/register', methods=['GET', 'POST'])
@@ -156,10 +205,12 @@ def register():
         
         if dynamodb:
             try:
+                # Check if user already exists
                 response = users_table.get_item(Key={'email': email})
                 if response.get('Item'):
                     return "User already exists", 400
                 
+                # Create new user
                 users_table.put_item(Item={
                     'email': email,
                     'password': password,
@@ -167,16 +218,14 @@ def register():
                     'created_at': datetime.now().isoformat()
                 })
                 
-                welcome_message = f"Welcome to TutorMatch, {name}! Your account has been created successfully."
-                send_notification(email, "Welcome to TutorMatch!", welcome_message)
+                # Send welcome notification
+                welcome_message = f"Welcome to TutorMatch, {name}! Your account has been created successfully. You can now search for tutors and book sessions."
+                send_notification(email, "Welcome to TutorMatch!", welcome_message, "welcome")
                 
                 return redirect(url_for('login'))
-            except:
-                pass
-        else:
-            if email in users:
-                return "User already exists", 400
-            users[email] = {"email": email, "password": password, "name": name}
+            except ClientError as e:
+                logger.error(f"Registration error: {str(e)}")
+                return "Registration failed. Please try again.", 500
         
         return redirect(url_for('login'))
     
@@ -186,11 +235,12 @@ def register():
         return '''
             <h1>Register</h1>
             <form method="post">
-            Name: <input name="name"><br>
-            Email: <input name="email"><br>
-            Password: <input name="password"><br>
+            Name: <input name="name" required><br><br>
+            Email: <input name="email" type="email" required><br><br>
+            Password: <input name="password" type="password" required><br><br>
             <button type="submit">Register</button>
             </form>
+            <p><a href="/login">Already have an account? Login here</a></p>
         '''
 
 @app.route('/student-dashboard')
@@ -200,19 +250,31 @@ def student_dashboard():
     except:
         return '''
         <h1>Student Dashboard</h1>
-        <a href="/tutor-search">Search Tutors</a>
+        <nav>
+            <a href="/tutor-search">Search Tutors</a> |
+            <a href="/api/student-data">My Bookings</a> |
+            <a href="/logout">Logout</a>
+        </nav>
         '''
 
 @app.route('/tutor-search')
 def tutor_search():
-    tutors_data_current = get_all_tutors()
+    tutors_data = get_all_tutors()
     try:
-        return render_template("tutor_search.html", tutors_with_id=[{"id": k, **v} for k, v in tutors_data_current.items()])
+        return render_template("tutor_search.html", tutors_with_id=[{"id": k, **v} for k, v in tutors_data.items()])
     except:
-        html = ""
-        for tid, t in tutors_data_current.items():
-            html += f"<h3>{t['name']}</h3><a href='/tutor-profile/{tid}'>View Profile</a><hr>"
-        return f"<h1>Find Tutors</h1>{html}"
+        html = "<h1>Find Tutors</h1>"
+        for tid, t in tutors_data.items():
+            html += f"""
+            <div style="border: 1px solid #ccc; padding: 10px; margin: 10px;">
+                <h3>{t['name']}</h3>
+                <p>Subjects: {', '.join(t.get('subjects', []))}</p>
+                <p>Rate: ${t.get('rate', 25)}/hour</p>
+                <p>Rating: {t.get('rating', 0)}/5</p>
+                <a href='/tutor-profile/{tid}'>View Profile</a>
+            </div>
+            """
+        return html
 
 @app.route('/tutor-profile/<tutor_id>')
 def tutor_profile(tutor_id):
@@ -222,7 +284,14 @@ def tutor_profile(tutor_id):
     try:
         return render_template("tutor_profile.html", tutor=tutor, tutor_id=tutor_id)
     except:
-        return f"<h1>{tutor['name']}</h1><a href='/book-session/{tutor_id}'>Book Session</a>"
+        return f"""
+        <h1>{tutor['name']}</h1>
+        <p>Subjects: {', '.join(tutor.get('subjects', []))}</p>
+        <p>Rate: ${tutor.get('rate', 25)}/hour</p>
+        <p>Rating: {tutor.get('rating', 0)}/5</p>
+        <p>Bio: {tutor.get('bio', 'No bio available')}</p>
+        <a href='/book-session/{tutor_id}'>Book Session</a>
+        """
 
 @app.route('/book-session/<tutor_id>', methods=['GET', 'POST'])
 def book_session(tutor_id):
@@ -240,27 +309,59 @@ def book_session(tutor_id):
         total_price = tutor.get('rate', 25) * sessions_count
         learning_goals = request.form.get('learning_goals', '')
         session_format = request.form.get('session_format', 'Online Video Call')
+        student_email = request.form.get('email', '')
+        student_phone = request.form.get('phone', '')
 
         booking_data = {
-            "booking_id": booking_id, "tutor_id": tutor_id, "tutor_data": tutor,
-            "date": date, "time": time, "subject": subject,
-            "session_type": session_type, "sessions_count": sessions_count,
-            "total_price": total_price, "learning_goals": learning_goals,
-            "session_format": session_format, "status": "pending_payment",
+            "booking_id": booking_id,
+            "tutor_id": tutor_id,
+            "tutor_name": tutor['name'],
+            "date": date,
+            "time": time,
+            "subject": subject,
+            "session_type": session_type,
+            "sessions_count": sessions_count,
+            "total_price": total_price,
+            "learning_goals": learning_goals,
+            "session_format": session_format,
+            "student_email": student_email,
+            "student_phone": student_phone,
+            "status": "pending_payment",
             "created_at": datetime.now().isoformat()
         }
 
         if dynamodb:
             try:
                 bookings_table.put_item(Item=booking_data)
-            except:
-                bookings[booking_id] = booking_data
-        else:
-            bookings[booking_id] = booking_data
+            except ClientError as e:
+                logger.error(f"Error creating booking: {str(e)}")
+                return "Booking failed. Please try again.", 500
         
         return redirect(url_for("payment", booking_id=booking_id))
 
-    return render_template("booksession.html", tutor=tutor, tutor_id=tutor_id)
+    try:
+        return render_template("booksession.html", tutor=tutor, tutor_id=tutor_id)
+    except:
+        return f"""
+        <h1>Book Session with {tutor['name']}</h1>
+        <form method="post">
+            <p>Date: <input name="date" type="date" required></p>
+            <p>Time: <input name="time" type="time" required></p>
+            <p>Subject: <select name="subject" required>
+                {''.join([f'<option value="{s}">{s}</option>' for s in tutor.get('subjects', [])])}
+            </select></p>
+            <p>Your Email: <input name="email" type="email" required></p>
+            <p>Your Phone: <input name="phone" type="tel" required></p>
+            <p>Learning Goals: <textarea name="learning_goals"></textarea></p>
+            <p>Session Format: 
+                <select name="session_format">
+                    <option value="Online Video Call">Online Video Call</option>
+                    <option value="In-Person">In-Person</option>
+                </select>
+            </p>
+            <button type="submit">Book Session</button>
+        </form>
+        """
 
 @app.route('/payment')
 def payment():
@@ -270,10 +371,11 @@ def payment():
         try:
             response = bookings_table.get_item(Key={'booking_id': booking_id})
             booking = response.get('Item')
-        except:
-            booking = bookings.get(booking_id)
+        except ClientError as e:
+            logger.error(f"Error fetching booking: {str(e)}")
+            booking = None
     else:
-        booking = bookings.get(booking_id)
+        booking = None
     
     if not booking:
         abort(404)
@@ -281,7 +383,26 @@ def payment():
     try:
         return render_template("payment.html", booking=booking, booking_id=booking_id)
     except:
-        return f"<h1>Pay ${booking['total_price']}</h1><form method='post' action='/process-payment'><input name='booking_id' value='{booking_id}'><button>Pay</button></form>"
+        return f"""
+        <h1>Payment</h1>
+        <p>Total Amount: ${booking['total_price']}</p>
+        <p>Tutor: {booking['tutor_name']}</p>
+        <p>Date: {booking['date']} at {booking['time']}</p>
+        <form method='post' action='/process-payment'>
+            <input name='booking_id' value='{booking_id}' type='hidden'>
+            <p>Payment Method: 
+                <select name='payment_method' required>
+                    <option value="credit_card">Credit Card</option>
+                    <option value="debit_card">Debit Card</option>
+                    <option value="upi">UPI</option>
+                    <option value="net_banking">Net Banking</option>
+                </select>
+            </p>
+            <p>Email: <input name='email' type='email' value='{booking.get("student_email", "")}' required></p>
+            <p>Phone: <input name='phone' type='tel' value='{booking.get("student_phone", "")}' required></p>
+            <button type='submit'>Pay ${booking['total_price']}</button>
+        </form>
+        """
 
 @app.route('/process-payment', methods=['POST'])
 def process_payment():
@@ -290,18 +411,21 @@ def process_payment():
     email = request.form['email']
     phone = request.form['phone']
     
+    # Get booking details
     if dynamodb:
         try:
             response = bookings_table.get_item(Key={'booking_id': booking_id})
             booking = response.get('Item')
-        except:
-            booking = bookings.get(booking_id)
+        except ClientError as e:
+            logger.error(f"Error fetching booking: {str(e)}")
+            abort(404)
     else:
-        booking = bookings.get(booking_id)
+        abort(404)
     
     if not booking:
         abort(404)
     
+    # Create payment record
     payment_id = str(uuid.uuid4())
     payment_data = {
         "payment_id": payment_id,
@@ -309,20 +433,31 @@ def process_payment():
         "amount": booking["total_price"],
         "payment_method": payment_method,
         "status": "completed",
+        "student_email": email,
+        "student_phone": phone,
         "created_at": datetime.now().isoformat()
     }
     
     if dynamodb:
         try:
+            # Save payment
             payments_table.put_item(Item=payment_data)
+            
+            # Update booking status
             bookings_table.update_item(
                 Key={'booking_id': booking_id},
                 UpdateExpression='SET #status = :status, payment_id = :payment_id',
                 ExpressionAttributeNames={'#status': 'status'},
-                ExpressionAttributeValues={':status': 'confirmed', ':payment_id': payment_id}
+                ExpressionAttributeValues={
+                    ':status': 'confirmed',
+                    ':payment_id': payment_id
+                }
             )
+            
+            # Create session record
+            session_id = str(uuid.uuid4())
             sessions_table.put_item(Item={
-                'session_id': str(uuid.uuid4()),
+                'session_id': session_id,
                 'booking_id': booking_id,
                 'tutor_id': booking['tutor_id'],
                 'student_email': email,
@@ -332,36 +467,58 @@ def process_payment():
                 'status': 'scheduled',
                 'created_at': datetime.now().isoformat()
             })
-        except:
-            payments[payment_id] = payment_data
-            bookings[booking_id]["status"] = "confirmed"
-            bookings[booking_id]["payment_id"] = payment_id
-    else:
-        payments[payment_id] = payment_data
-        bookings[booking_id]["status"] = "confirmed"
-        bookings[booking_id]["payment_id"] = payment_id
+            
+        except ClientError as e:
+            logger.error(f"Error processing payment: {str(e)}")
+            return "Payment processing failed. Please try again.", 500
     
-    # Send notifications
-    payment_message = f"""Payment Confirmed!
-    
-Amount: ${booking['total_price']}
-Tutor: {booking['tutor_data']['name']}
-Session: {booking['date']} at {booking['time']}
-Subject: {booking['subject']}
+    # Send payment confirmation email
+    payment_message = f"""
+    Dear Student,
 
-Thank you for choosing TutorMatch!"""
-    
-    send_notification(email, "Payment Confirmation - TutorMatch", payment_message)
-    
-    session_reminder = f"""Session Reminder!
-    
-Your session with {booking['tutor_data']['name']} is scheduled for:
-Date: {booking['date']} at {booking['time']}
-Subject: {booking['subject']}
+    Your payment has been successfully processed!
 
-Please be ready 5 minutes before the session."""
+    Payment Details:
+    - Payment ID: {payment_id}
+    - Amount: ${booking['total_price']}
+    - Payment Method: {payment_method.replace('_', ' ').title()}
+    - Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+    Session Details:
+    - Tutor: {booking['tutor_name']}
+    - Subject: {booking['subject']}
+    - Date & Time: {booking['date']} at {booking['time']}
+    - Format: {booking.get('session_format', 'Online Video Call')}
+
+    You will receive a reminder email 24 hours before your session.
+
+    Thank you for choosing TutorMatch!
+
+    Best regards,
+    TutorMatch Team
+    """
     
-    send_notification(email, "Session Reminder - TutorMatch", session_reminder)
+    send_notification(email, "Payment Confirmation - TutorMatch", payment_message, "payment_confirmation")
+    
+    # Send session reminder notification (this would typically be scheduled)
+    session_reminder = f"""
+    Dear Student,
+
+    This is a reminder for your upcoming tutoring session:
+
+    Session Details:
+    - Tutor: {booking['tutor_name']}
+    - Subject: {booking['subject']}
+    - Date & Time: {booking['date']} at {booking['time']}
+    - Format: {booking.get('session_format', 'Online Video Call')}
+
+    Please be ready 5 minutes before the session starts.
+
+    Best regards,
+    TutorMatch Team
+    """
+    
+    send_notification(email, "Session Reminder - TutorMatch", session_reminder, "session_reminder")
     
     return redirect(url_for('confirmation', booking_id=booking_id))
 
@@ -373,10 +530,11 @@ def confirmation():
         try:
             response = bookings_table.get_item(Key={'booking_id': booking_id})
             booking = response.get('Item')
-        except:
-            booking = bookings.get(booking_id)
+        except ClientError as e:
+            logger.error(f"Error fetching booking: {str(e)}")
+            booking = None
     else:
-        booking = bookings.get(booking_id)
+        booking = None
     
     if not booking:
         abort(404)
@@ -384,7 +542,21 @@ def confirmation():
     try:
         return render_template("confirmation.html", booking=booking)
     except:
-        return f"<h1>Booking Confirmed</h1><p>Session with {booking['tutor_data']['name']} confirmed.</p>"
+        return f"""
+        <h1>Booking Confirmed!</h1>
+        <div style="border: 2px solid green; padding: 20px; margin: 20px;">
+            <h2>Session Details</h2>
+            <p><strong>Booking ID:</strong> {booking['booking_id']}</p>
+            <p><strong>Tutor:</strong> {booking['tutor_name']}</p>
+            <p><strong>Subject:</strong> {booking['subject']}</p>
+            <p><strong>Date & Time:</strong> {booking['date']} at {booking['time']}</p>
+            <p><strong>Format:</strong> {booking.get('session_format', 'Online Video Call')}</p>
+            <p><strong>Total Paid:</strong> ${booking['total_price']}</p>
+            <p><strong>Status:</strong> {booking['status'].title()}</p>
+        </div>
+        <p>You will receive email notifications regarding your session.</p>
+        <a href="/student-dashboard">Back to Dashboard</a>
+        """
 
 @app.route('/api/student-data')
 def student_data():
@@ -394,70 +566,42 @@ def student_data():
     
     if dynamodb:
         try:
+            # Get all bookings
             bookings_response = bookings_table.scan()
-            for b in bookings_response['Items']:
+            for booking in bookings_response['Items']:
                 student_bookings.append({
-                    "id": b["booking_id"], "tutor_name": b["tutor_data"]["name"], "subject": b["subject"],
-                    "date": b["date"], "time": b["time"], "status": b["status"],
-                    "total_price": b["total_price"], "session_format": b["session_format"],
-                    "created_at": b["created_at"]
+                    "id": booking["booking_id"],
+                    "tutor_name": booking["tutor_name"],
+                    "subject": booking["subject"],
+                    "date": booking["date"],
+                    "time": booking["time"],
+                    "status": booking["status"],
+                    "total_price": booking["total_price"],
+                    "session_format": booking.get("session_format", "Online Video Call"),
+                    "created_at": booking["created_at"]
                 })
-                if b["status"] == "confirmed":
+                
+                if booking["status"] == "confirmed":
                     notifications.append({
-                        "type": "success", "title": "Session Confirmed",
-                        "message": f"Your session with {b['tutor_data']['name']} is confirmed.",
+                        "type": "success",
+                        "title": "Session Confirmed",
+                        "message": f"Your session with {booking['tutor_name']} is confirmed for {booking['date']} at {booking['time']}.",
                         "date": datetime.now().strftime("%Y-%m-%d")
                     })
             
+            # Get all payments
             payments_response = payments_table.scan()
-            for p in payments_response['Items']:
+            for payment in payments_response['Items']:
                 student_payments.append({
-                    "id": p["payment_id"], "amount": p["amount"],
-                    "status": p["status"], "method": p["payment_method"],
-                    "date": p["created_at"]
+                    "id": payment["payment_id"],
+                    "amount": payment["amount"],
+                    "status": payment["status"],
+                    "method": payment["payment_method"],
+                    "date": payment["created_at"]
                 })
-        except:
-            for b in bookings.values():
-                student_bookings.append({
-                    "id": b["id"], "tutor_name": b["tutor_data"]["name"], "subject": b["subject"],
-                    "date": b["date"], "time": b["time"], "status": b["status"],
-                    "total_price": b["total_price"], "session_format": b["session_format"],
-                    "created_at": b["created_at"]
-                })
-                if b["status"] == "confirmed":
-                    notifications.append({
-                        "type": "success", "title": "Session Confirmed",
-                        "message": f"Your session with {b['tutor_data']['name']} is confirmed.",
-                        "date": datetime.now().strftime("%Y-%m-%d")
-                    })
-            
-            for p in payments.values():
-                student_payments.append({
-                    "id": p["id"], "amount": p["amount"],
-                    "status": p["status"], "method": p["payment_method"],
-                    "date": p["created_at"]
-                })
-    else:
-        for b in bookings.values():
-            student_bookings.append({
-                "id": b["id"], "tutor_name": b["tutor_data"]["name"], "subject": b["subject"],
-                "date": b["date"], "time": b["time"], "status": b["status"],
-                "total_price": b["total_price"], "session_format": b["session_format"],
-                "created_at": b["created_at"]
-            })
-            if b["status"] == "confirmed":
-                notifications.append({
-                    "type": "success", "title": "Session Confirmed",
-                    "message": f"Your session with {b['tutor_data']['name']} is confirmed.",
-                    "date": datetime.now().strftime("%Y-%m-%d")
-                })
-        
-        for p in payments.values():
-            student_payments.append({
-                "id": p["id"], "amount": p["amount"],
-                "status": p["status"], "method": p["payment_method"],
-                "date": p["created_at"]
-            })
+                
+        except ClientError as e:
+            logger.error(f"Error fetching student data: {str(e)}")
     
     return jsonify({
         "bookings": student_bookings,
@@ -471,8 +615,24 @@ def logout():
 
 @app.route('/health')
 def health():
-    tutors_count = len(get_all_tutors())
-    return jsonify({"status": "healthy", "tutors_count": tutors_count})
+    tutors_count = 0
+    if dynamodb:
+        try:
+            response = tutors_table.scan(Select='COUNT')
+            tutors_count = response['Count']
+        except ClientError as e:
+            logger.error(f"Health check error: {str(e)}")
+    
+    return jsonify({
+        "status": "healthy",
+        "tutors_count": tutors_count,
+        "aws_services": {
+            "dynamodb": dynamodb is not None,
+            "sns": sns_client is not None
+        }
+    })
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    port = int(os.environ.get('PORT', 8000))
+    debug = os.environ.get('FLASK_ENV') == 'development'
+    app.run(host='0.0.0.0', port=port, debug=debug)
