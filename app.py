@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, redirect, url_for, jsonify, abort
+from flask import Flask, render_template, request, redirect, url_for, jsonify, abort, session
 from datetime import datetime, timedelta
 import boto3
 import json
@@ -8,7 +8,7 @@ from decimal import Decimal
 from botocore.exceptions import ClientError
 
 app = Flask(__name__)
-app.secret_key = 'your-secret-key'
+app.secret_key = 'your-secret-key-change-this-in-production'
 
 # AWS Configuration
 AWS_REGION = 'us-east-1'
@@ -112,14 +112,14 @@ def get_user(email):
 def create_user(email, password, name):
     """Create a new user in DynamoDB"""
     try:
-        users_table.put_item(
-            Item={
-                'email': email,
-                'password': password,
-                'name': name,
-                'created_at': datetime.now().isoformat()
-            }
-        )
+        user_data = {
+            'email': email,
+            'password': password,
+            'name': name,
+            'created_at': datetime.now().isoformat()
+        }
+        users_table.put_item(Item=user_data)
+        print(f"User created successfully: {email}")
         return True
     except ClientError as e:
         print(f"Error creating user: {e}")
@@ -213,15 +213,21 @@ def get_user_payments(user_email):
 def send_notification(subject, message, user_email=None):
     """Send notification via SNS"""
     try:
-        full_message = f"User: {user_email}\n{message}" if user_email else message
-        sns.publish(
+        full_message = f"TutorMatch Notification\n\nUser: {user_email if user_email else 'System'}\n\n{message}\n\nTime: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        
+        response = sns.publish(
             TopicArn=SNS_TOPIC_ARN,
             Subject=subject,
             Message=full_message
         )
-        print(f"Notification sent: {subject}")
+        print(f"Notification sent successfully: {subject} - MessageId: {response.get('MessageId')}")
+        return True
     except ClientError as e:
         print(f"Error sending notification: {e}")
+        return False
+    except Exception as e:
+        print(f"Unexpected error sending notification: {e}")
+        return False
 
 # Initialize tutors on startup
 initialize_tutors()
@@ -243,6 +249,9 @@ def login():
         password = request.form['password']
         user = get_user(email)
         if user and user['password'] == password:
+            session['user_email'] = email  # Store user in session
+            session['user_name'] = user['name']
+            print(f"User logged in: {email}")
             return redirect(url_for('student_dashboard'))
         return "Invalid credentials", 401
     try:
@@ -251,8 +260,8 @@ def login():
         return '''
             <h1>Login</h1>
             <form method="post">
-            Email: <input name="email"><br>
-            Password: <input name="password"><br>
+            Email: <input name="email" type="email" required><br><br>
+            Password: <input name="password" type="password" required><br><br>
             <button type="submit">Login</button>
             </form>
         '''
@@ -320,6 +329,10 @@ def tutor_profile(tutor_id):
 
 @app.route('/book-session/<tutor_id>', methods=['GET', 'POST'])
 def book_session(tutor_id):
+    # Check if user is logged in
+    if 'user_email' not in session:
+        return redirect(url_for('login'))
+    
     tutor = get_tutor(tutor_id)
     if not tutor:
         abort(404)
@@ -331,10 +344,10 @@ def book_session(tutor_id):
         subject = request.form['subject']
         session_type = request.form.get('session_type', 'Single Session')
         sessions_count = int(request.form.get('sessions_count', 1))
-        total_price = tutor.get('rate', 25) * sessions_count
+        total_price = float(tutor.get('rate', 25)) * sessions_count
         learning_goals = request.form.get('learning_goals', '')
         session_format = request.form.get('session_format', 'Online Video Call')
-        user_email = request.form.get('user_email', 'demo@example.com')  # You should get this from session
+        user_email = session['user_email']
 
         booking_data = {
             "booking_id": booking_id,
@@ -353,14 +366,19 @@ def book_session(tutor_id):
             "created_at": datetime.now().isoformat()
         }
         
+        print(f"Creating booking: {booking_data}")
+        
         if create_booking(booking_data):
+            # Send booking notification
             send_notification(
                 "New Booking Created", 
-                f"New booking created for {tutor['name']} on {date} at {time}",
+                f"New booking created:\n- Tutor: {tutor['name']}\n- Date: {date}\n- Time: {time}\n- Subject: {subject}\n- User: {user_email}",
                 user_email
             )
+            print(f"Booking created successfully: {booking_id}")
             return redirect(url_for("payment", booking_id=booking_id))
         else:
+            print("Failed to create booking")
             return "Booking failed", 500
 
     try:
@@ -369,11 +387,22 @@ def book_session(tutor_id):
         return f'''
             <h1>Book Session with {tutor['name']}</h1>
             <form method="post">
-            Date: <input name="date" type="date"><br>
-            Time: <input name="time" type="time"><br>
-            Subject: <input name="subject"><br>
-            User Email: <input name="user_email" type="email"><br>
-            <button type="submit">Book</button>
+            Date: <input name="date" type="date" required><br><br>
+            Time: <input name="time" type="time" required><br><br>
+            Subject: <input name="subject" required><br><br>
+            Sessions Count: <input name="sessions_count" type="number" value="1" min="1"><br><br>
+            Session Type: 
+            <select name="session_type">
+                <option value="Single Session">Single Session</option>
+                <option value="Package">Package</option>
+            </select><br><br>
+            Learning Goals: <textarea name="learning_goals"></textarea><br><br>
+            Session Format:
+            <select name="session_format">
+                <option value="Online Video Call">Online Video Call</option>
+                <option value="In Person">In Person</option>
+            </select><br><br>
+            <button type="submit">Book Session</button>
             </form>
         '''
 
@@ -400,9 +429,14 @@ def payment():
 @app.route('/process-payment', methods=['POST'])
 def process_payment():
     booking_id = request.form['booking_id']
-    payment_method = request.form['payment_method']
-    email = request.form['email']
-    phone = request.form['phone']
+    payment_method = request.form.get('payment_method', 'Credit Card')
+    
+    # Get user info from session
+    if 'user_email' not in session:
+        return redirect(url_for('login'))
+    
+    user_email = session['user_email']
+    phone = request.form.get('phone', '')
     
     booking = get_booking(booking_id)
     if not booking:
@@ -412,22 +446,36 @@ def process_payment():
     payment_data = {
         "payment_id": payment_id,
         "booking_id": booking_id,
-        "user_email": email,
-        "amount": booking["total_price"],
+        "user_email": user_email,
+        "amount": float(booking["total_price"]),
         "payment_method": payment_method,
         "phone": phone,
         "status": "completed",
         "created_at": datetime.now().isoformat()
     }
     
+    print(f"Processing payment: {payment_data}")
+    
     if create_payment(payment_data) and update_booking_status(booking_id, "confirmed", payment_id):
+        # Send payment confirmation notification
         send_notification(
-            "Payment Successful", 
-            f"Payment of ${booking['total_price']} completed for booking {booking_id}",
-            email
+            "Payment Successful - TutorMatch", 
+            f"Payment Confirmation:\n- Amount: ${booking['total_price']}\n- Booking ID: {booking_id}\n- Tutor: {booking['tutor_data']['name']}\n- Date: {booking['date']}\n- Time: {booking['time']}\n- Payment Method: {payment_method}",
+            user_email
         )
+        
+        # Send session reminder notification
+        session_datetime = datetime.strptime(f"{booking['date']} {booking['time']}", "%Y-%m-%d %H:%M")
+        send_notification(
+            "Upcoming Session Reminder - TutorMatch",
+            f"Session Reminder:\n- Tutor: {booking['tutor_data']['name']}\n- Subject: {booking['subject']}\n- Date: {booking['date']}\n- Time: {booking['time']}\n- Format: {booking['session_format']}\n- Learning Goals: {booking.get('learning_goals', 'N/A')}",
+            user_email
+        )
+        
+        print(f"Payment processed successfully: {payment_id}")
         return redirect(url_for('confirmation', booking_id=booking_id))
     else:
+        print("Payment processing failed")
         return "Payment processing failed", 500
 
 @app.route('/confirmation')
@@ -443,7 +491,10 @@ def confirmation():
 
 @app.route('/api/student-data')
 def student_data():
-    user_email = request.args.get('email', 'demo@example.com')  # Should come from session
+    if 'user_email' not in session:
+        return jsonify({"error": "User not logged in"}), 401
+        
+    user_email = session['user_email']
     
     student_bookings = []
     student_payments = []
@@ -451,6 +502,8 @@ def student_data():
     
     # Get user bookings
     bookings = get_user_bookings(user_email)
+    print(f"Found {len(bookings)} bookings for user {user_email}")
+    
     for b in bookings:
         student_bookings.append({
             "id": b["booking_id"],
@@ -468,12 +521,14 @@ def student_data():
             notifications.append({
                 "type": "success",
                 "title": "Session Confirmed",
-                "message": f"Your session with {b['tutor_data']['name']} is confirmed.",
+                "message": f"Your session with {b['tutor_data']['name']} on {b['date']} at {b['time']} is confirmed.",
                 "date": datetime.now().strftime("%Y-%m-%d")
             })
     
     # Get user payments
     payments = get_user_payments(user_email)
+    print(f"Found {len(payments)} payments for user {user_email}")
+    
     for p in payments:
         student_payments.append({
             "id": p["payment_id"],
@@ -491,6 +546,7 @@ def student_data():
 
 @app.route('/logout')
 def logout():
+    session.clear()  # Clear session data
     return redirect(url_for("homepage"))
 
 @app.route('/health')
@@ -532,5 +588,53 @@ def admin_stats():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+# Add debugging route to check data
+@app.route('/debug/tables')
+def debug_tables():
+    """Debug endpoint to check table contents"""
+    try:
+        # Check tutors
+        tutors_response = tutors_table.scan()
+        tutors_count = len(tutors_response.get('Items', []))
+        
+        # Check bookings
+        bookings_response = bookings_table.scan()
+        bookings_count = len(bookings_response.get('Items', []))
+        
+        # Check payments
+        payments_response = payments_table.scan()
+        payments_count = len(payments_response.get('Items', []))
+        
+        # Check users
+        users_response = users_table.scan()
+        users_count = len(users_response.get('Items', []))
+        
+        debug_info = {
+            "tutors": {
+                "count": tutors_count,
+                "items": [item['tutor_id'] for item in tutors_response.get('Items', [])]
+            },
+            "bookings": {
+                "count": bookings_count,
+                "items": [item['booking_id'] for item in bookings_response.get('Items', [])]
+            },
+            "payments": {
+                "count": payments_count,
+                "items": [item['payment_id'] for item in payments_response.get('Items', [])]
+            },
+            "users": {
+                "count": users_count,
+                "items": [item['email'] for item in users_response.get('Items', [])]
+            }
+        }
+        
+        return jsonify(debug_info)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 if __name__ == '__main__':
+    print("Starting TutorMatch application...")
+    print("Initializing tutors...")
+    initialize_tutors()
+    print("Application ready!")
     app.run(host='0.0.0.0', port=8000, debug=True)
