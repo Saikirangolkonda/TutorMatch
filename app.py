@@ -8,10 +8,10 @@ import json
 app = Flask(__name__)
 app.secret_key = 'your-secret-key'
 
-# AWS Region (Mumbai)
+# AWS Region
 region = 'ap-south-1'
 
-# AWS clients
+# AWS Clients
 dynamodb = boto3.resource('dynamodb', region_name=region)
 sns = boto3.client('sns', region_name=region)
 sns_topic_arn = 'arn:aws:sns:ap-south-1:686255965861:TutorMatchNotifications'
@@ -90,25 +90,31 @@ def book_session(tutor_id):
     if request.method == 'POST':
         booking_id = str(uuid.uuid4())
         try:
+            session_type = request.form.get('session_type', 'Single Session')
+            sessions_count = int(request.form.get('sessions_count', 1))
+            total_price = tutor.get('rate', 25) * sessions_count
+
             booking = {
                 "booking_id": booking_id,
                 "tutor_id": tutor_id,
                 "date": request.form['date'],
                 "time": request.form['time'],
                 "subject": request.form['subject'],
-                "session_type": request.form.get('session_type', 'Single Session'),
-                "sessions_count": int(request.form.get('sessions_count', 1)),
-                "total_price": tutor.get('rate', 25) * int(request.form.get('sessions_count', 1)),
+                "session_type": session_type,
+                "sessions_count": sessions_count,
+                "total_price": total_price,
                 "learning_goals": request.form.get('learning_goals', ''),
                 "session_format": request.form.get('session_format', 'Online Video Call'),
                 "status": "pending_payment",
-                "created_at": datetime.utcnow().isoformat()
+                "created_at": datetime.utcnow().isoformat(),
+                "tutor_data": tutor  # ✅ include tutor details directly
             }
             bookings_table.put_item(Item=booking)
             return redirect(url_for("payment", booking_id=booking_id))
         except Exception as e:
             print("Booking Error:", e)
             return f"Error while booking: {e}", 500
+
     return render_template("booksession.html", tutor=tutor, tutor_id=tutor_id)
 
 @app.route('/payment')
@@ -118,6 +124,11 @@ def payment():
         booking = bookings_table.get_item(Key={'booking_id': booking_id}).get('Item')
         if not booking:
             abort(404)
+
+        # Safety fallback (in case tutor_data is missing)
+        if 'tutor_data' not in booking:
+            booking['tutor_data'] = tutors_data.get(booking['tutor_id'], {})
+
         return render_template("payment.html", booking=booking, booking_id=booking_id)
     except Exception as e:
         print("Payment Load Error:", e)
@@ -144,18 +155,19 @@ def process_payment():
             "status": "completed",
             "created_at": datetime.utcnow().isoformat()
         }
-
         payments_table.put_item(Item=payment)
 
-        # Update booking status
+        # Update booking with confirmed status
         booking['status'] = "confirmed"
         booking['payment_id'] = payment_id
         bookings_table.put_item(Item=booking)
 
-        # Notify via SNS
+        tutor_name = booking.get('tutor_data', {}).get('name', f"Tutor {booking['tutor_id']}")
+
+        # Send SNS notification
         sns.publish(
             TopicArn=sns_topic_arn,
-            Message=f"Your session with Tutor {booking['tutor_id']} is confirmed on {booking['date']} at {booking['time']}.",
+            Message=f"Your session with {tutor_name} is confirmed on {booking['date']} at {booking['time']}.",
             Subject="TutorMatch Booking Confirmed"
         )
 
@@ -172,6 +184,11 @@ def confirmation():
         booking = bookings_table.get_item(Key={'booking_id': booking_id}).get('Item')
         if not booking:
             abort(404)
+
+        # Ensure tutor data present
+        if 'tutor_data' not in booking:
+            booking['tutor_data'] = tutors_data.get(booking['tutor_id'], {})
+
         return render_template("confirmation.html", booking=booking)
     except Exception as e:
         print("Confirmation Error:", e)
@@ -182,15 +199,44 @@ def student_data():
     try:
         bookings = bookings_table.scan().get('Items', [])
         payments = payments_table.scan().get('Items', [])
-        notifications = [{
-            "type": "success",
-            "title": "Session Confirmed",
-            "message": f"Session with Tutor {b['tutor_id']} confirmed.",
-            "date": datetime.utcnow().strftime("%Y-%m-%d")
-        } for b in bookings if b['status'] == 'confirmed']
+
+        student_bookings = []
+        student_payments = []
+        notifications = []
+
+        for b in bookings:
+            student_bookings.append({
+                "id": b["booking_id"],
+                "tutor_name": b.get("tutor_data", {}).get("name", "Unknown"),
+                "subject": b["subject"],
+                "date": b["date"],
+                "time": b["time"],
+                "status": b["status"],
+                "total_price": b["total_price"],
+                "session_format": b["session_format"],
+                "created_at": b["created_at"]
+            })
+            if b.get("payment_id"):
+                p = next((x for x in payments if x['payment_id'] == b['payment_id']), None)
+                if p:
+                    student_payments.append({
+                        "id": p["payment_id"],
+                        "amount": p["amount"],
+                        "status": p["status"],
+                        "method": p["payment_method"],
+                        "date": p["created_at"]
+                    })
+            if b["status"] == "confirmed":
+                notifications.append({
+                    "type": "success",
+                    "title": "Session Confirmed",
+                    "message": f"Your session with {b.get('tutor_data', {}).get('name', 'your tutor')} is confirmed.",
+                    "date": datetime.utcnow().strftime("%Y-%m-%d")
+                })
+
         return jsonify({
-            "bookings": bookings,
-            "payments": payments,
+            "bookings": student_bookings,
+            "payments": student_payments,
             "notifications": notifications
         })
     except Exception as e:
