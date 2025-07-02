@@ -1,60 +1,32 @@
-from flask import Flask, request, render_template, redirect, url_for, session, jsonify, abort
-from datetime import datetime, timedelta
+from flask import Flask, render_template, request, redirect, url_for, jsonify, abort
+from datetime import datetime
 from decimal import Decimal
 import boto3
 import uuid
-import json
 import os
+import json
+
 
 app = Flask(__name__)
-app.secret_key = 'your-secret-key-here'
+app.secret_key = 'your-secret-key'
 
-# AWS setup
-region = 'ap-south-1'
-dynamodb = boto3.resource('dynamodb', region_name=region)
-sns = boto3.client('sns', region_name=region)
+# AWS config
+dynamodb = boto3.resource('dynamodb', region_name='us-east-1')
+sns = boto3.client('sns', region_name='ap-south-1')
+sns_topic_arn = 'arn:aws:sns:ap-south-1:686255965861:TutorMatchNotifications'
 
-# DynamoDB Tables
 users_table = dynamodb.Table('Users')
-tutors_table = dynamodb.Table('Tutors')
 bookings_table = dynamodb.Table('Bookings')
 payments_table = dynamodb.Table('Payments')
-sessions_table = dynamodb.Table('Sessions')
 
-# SNS Topic ARN
-SNS_TOPIC_ARN = 'arn:aws:sns:ap-south-1:336133425253:TutorMatchNotifications'
-
-# Load tutor data from JSON
-try:
-    with open('templates/tutors_data.json') as f:
-        tutor_data = json.load(f)
-except FileNotFoundError:
-    print("Warning: tutors_data.json not found. Using empty tutor list.")
-    tutor_data = []
+# Load tutors from local JSON
+TUTORS_FILE = os.path.join("templates", "tutors_data.json")
+with open(TUTORS_FILE) as f:
+    tutors_data = json.load(f)
 
 @app.route('/')
-def home():
-    return render_template('homepage.html')
-
-@app.route('/register', methods=['GET', 'POST'])
-def register():
-    if request.method == 'POST':
-        email = request.form['email']
-        password = request.form['password']
-        name = request.form['name']
-        role = request.form.get('role', 'student')
-        try:
-            users_table.put_item(Item={
-                'email': email,
-                'password': password,
-                'name': name,
-                'role': role
-            })
-            return redirect(url_for('login'))
-        except Exception as e:
-            print("DynamoDB Register Error:", str(e))
-            return "Error during registration"
-    return render_template('register.html')
+def homepage():
+    return render_template("homepage.html")
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -64,199 +36,213 @@ def login():
         try:
             response = users_table.get_item(Key={'email': email})
             user = response.get('Item')
-            if user and user['password'] == password:
-                session['user'] = user
-                role = user.get('role', 'student')
-                return redirect(url_for('student_dashboard' if role == 'student' else 'tutor_dashboard'))
-            else:
-                return "Invalid credentials", 401
+            if user and user.get('password') == password:
+                return redirect(url_for('student_dashboard', student_email=email))
+            return "Invalid credentials", 401
         except Exception as e:
-            print("Login Error:", str(e))
-            return "Login failed"
-    return render_template('login.html')
+            print("Login Error:", e)
+            return "Internal server error", 500
+    return render_template("login.html")
+
+@app.route('/register', methods=['GET', 'POST'])
+def register():
+    if request.method == 'POST':
+        email = request.form['email']
+        password = request.form['password']
+        name = request.form['name']
+        try:
+            users_table.put_item(Item={'email': email, 'password': password, 'name': name})
+            return redirect(url_for('login'))
+        except Exception as e:
+            print("DynamoDB Register Error:", e)
+            return "Registration failed", 500
+    return render_template("register.html")
 
 @app.route('/student-dashboard')
 def student_dashboard():
-    if 'user' not in session or session['user'].get('role') != 'student':
-        return redirect(url_for('login'))
-    return render_template('student_dashboard.html')
-
-@app.route('/tutor-dashboard')
-def tutor_dashboard():
-    if 'user' not in session or session['user'].get('role') != 'tutor':
-        return redirect(url_for('login'))
-    return render_template('tutor_dashboard.html')
+    return render_template("student_dashboard.html")
 
 @app.route('/tutor-search')
 def tutor_search():
-    return render_template('tutor_search.html', tutors=tutor_data)
+    return render_template("tutor_search.html", tutors_with_id=[{"id": k, **v} for k, v in tutors_data.items()])
 
-@app.route('/book-session/<int:tutor_id>', methods=['GET', 'POST'])
-def book_session(tutor_id):
-    if 'user' not in session or session['user'].get('role') != 'student':
-        return redirect(url_for('login'))
-
-    # Convert tutor_id to int to match with tutor data
-    try:
-        tutor_id_int = int(tutor_id)
-    except (ValueError, TypeError):
-        print(f"Invalid tutor_id: {tutor_id}")
-        abort(404)
-
-    # Find tutor by ID
-    tutor = None
-    for t in tutor_data:
-        if isinstance(t, dict) and t.get('id') == tutor_id_int:
-            tutor = t
-            break
-    
+@app.route('/tutor-profile/<tutor_id>')
+def tutor_profile(tutor_id):
+    tutor = tutors_data.get(tutor_id)
     if not tutor:
-        print(f"Tutor not found for ID: {tutor_id_int}")
+        abort(404)
+    return render_template("tutor_profile.html", tutor=tutor, tutor_id=tutor_id)
+
+@app.route('/book-session/<tutor_id>', methods=['GET', 'POST'])
+def book_session(tutor_id):
+    tutor = tutors_data.get(tutor_id)
+    if not tutor:
         abort(404)
 
     if request.method == 'POST':
         try:
-            session_format = request.form.get('session_format', 'Online')
             booking_id = str(uuid.uuid4())
-            start_time = datetime.now() + timedelta(days=1)
-            end_time = start_time + timedelta(hours=1)
-            
-            # Ensure price is properly handled
-            price = tutor.get('price', 0)
-            if isinstance(price, str):
-                price = float(price.replace('₹', '').replace(',', '').strip())
-            total_price = Decimal(str(price))
+            date = request.form['date']
+            time = request.form['time']
+            subject = request.form['subject']
+            session_type = request.form.get('session_type', 'Single Session')
+            sessions_count = int(request.form.get('sessions_count', 1))
+            total_price = Decimal(str(tutor.get('rate', 25))) * sessions_count
+            learning_goals = request.form.get('learning_goals', '')
+            session_format = request.form.get('session_format', 'Online Video Call')
 
-            bookings_table.put_item(Item={
-                'booking_id': booking_id,
-                'student_email': session['user']['email'],
-                'tutor_id': str(tutor_id_int),
-                'start_time': start_time.isoformat(),
-                'end_time': end_time.isoformat(),
-                'total_price': str(total_price),
-                'session_format': session_format,
-                'tutor_name': tutor.get('name', 'Unknown Tutor'),
-                'status': 'pending_payment'
-            })
+            booking_data = {
+                "booking_id": booking_id,
+                "tutor_id": tutor_id,
+                "date": date,
+                "time": time,
+                "subject": subject,
+                "session_type": session_type,
+                "sessions_count": sessions_count,
+                "total_price": total_price,
+                "learning_goals": learning_goals,
+                "session_format": session_format,
+                "status": "pending_payment",
+                "created_at": datetime.now().isoformat()
+            }
 
-            return redirect(url_for('payment', booking_id=booking_id))
+            bookings_table.put_item(Item=booking_data)
+            return redirect(url_for("payment", booking_id=booking_id))
         except Exception as e:
-            print("Booking Error:", str(e))
-            return f"Error while booking: {str(e)}"
+            print("Booking Error:", e)
+            return "Booking failed", 500
 
-    return render_template('booksession.html', tutor=tutor)
+    return render_template("booksession.html", tutor=tutor, tutor_id=tutor_id)
 
 @app.route('/payment')
 def payment():
     booking_id = request.args.get('booking_id')
-    if not booking_id:
-        abort(400, description="Booking ID is required")
-    
     try:
         response = bookings_table.get_item(Key={'booking_id': booking_id})
         booking = response.get('Item')
         if not booking:
-            abort(404, description="Booking not found")
-        return render_template('payment.html', booking=booking, booking_id=booking_id)
+            abort(404)
+        tutor = tutors_data.get(booking['tutor_id'], {})
+        return render_template("payment.html", booking=booking, booking_id=booking_id, tutor=tutor)
     except Exception as e:
-        print("Payment Load Error:", str(e))
-        return f"<h1>Payment Error</h1><p>{str(e)}</p>"
+        print("Payment Load Error:", e)
+        return "Error loading payment page", 500
 
 @app.route('/process-payment', methods=['POST'])
 def process_payment():
+    booking_id = request.form['booking_id']
+    payment_method = request.form['payment_method']
+    email = request.form['email']
+    phone = request.form['phone']
+
     try:
-        payment_id = str(uuid.uuid4())
-        booking_id = request.form['booking_id']
-        payment_method = request.form['payment_method']
-        email = request.form['email']
-        phone = request.form['phone']
-
-        # Validate required fields
-        if not all([booking_id, payment_method, email, phone]):
-            return "Missing required payment information", 400
-
-        payments_table.put_item(Item={
-            'payment_id': payment_id,
-            'booking_id': booking_id,
-            'payment_method': payment_method,
-            'email': email,
-            'phone': phone,
-            'status': 'Paid',
-            'timestamp': datetime.now().isoformat()
-        })
-
-        # Get booking details
-        booking_response = bookings_table.get_item(Key={'booking_id': booking_id})
-        booking = booking_response.get('Item')
-        
+        response = bookings_table.get_item(Key={'booking_id': booking_id})
+        booking = response.get('Item')
         if not booking:
-            return "Booking not found", 404
-            
-        tutor_name = booking.get('tutor_name', 'your tutor')
-        session_format = booking.get('session_format', 'Online')
+            abort(404)
 
-        # Update booking status
+        payment_id = str(uuid.uuid4())
+        payment_record = {
+            "payment_id": payment_id,
+            "booking_id": booking_id,
+            "amount": Decimal(str(booking["total_price"])),
+            "payment_method": payment_method,
+            "status": "completed",
+            "created_at": datetime.now().isoformat()
+        }
+
+        payments_table.put_item(Item=payment_record)
+
         bookings_table.update_item(
             Key={'booking_id': booking_id},
-            UpdateExpression="SET #s = :s, payment_id = :p",
-            ExpressionAttributeNames={'#s': 'status'},
-            ExpressionAttributeValues={':s': 'confirmed', ':p': payment_id}
+            UpdateExpression="set #s = :s, payment_id = :p",
+            ExpressionAttributeNames={"#s": "status"},
+            ExpressionAttributeValues={":s": "confirmed", ":p": payment_id}
         )
 
-        # Send SNS notification
-        try:
-            sns.publish(
-                TopicArn=SNS_TOPIC_ARN,
-                Subject="Session Confirmation",
-                Message=f"Payment successful for your {session_format} session with {tutor_name}. Booking ID: {booking_id}"
-            )
-        except Exception as sns_error:
-            print(f"SNS Error: {sns_error}")
-            # Continue even if SNS fails
-
-        return render_template("confirmation.html", booking_id=booking_id)
-    except Exception as e:
-        print("Payment Process Error:", str(e))
-        return f"Payment failed: {str(e)}"
-
-@app.route('/api/student-data')
-def student_data():
-    student_email = request.args.get('student_email')
-    if not student_email:
-        return jsonify([])
-    
-    try:
-        response = bookings_table.scan(
-            FilterExpression=boto3.dynamodb.conditions.Attr('student_email').eq(student_email)
+        sns.publish(
+            TopicArn=sns_topic_arn,
+            Message=f"Session with tutor {booking['tutor_id']} confirmed for {booking['date']} at {booking['time']}.",
+            Subject="Session Confirmation"
         )
-        return jsonify(response.get('Items', []))
+
+        return redirect(url_for('confirmation', booking_id=booking_id))
     except Exception as e:
-        print("Student Data Load Error:", str(e))
-        return jsonify([])
+        print("Payment Error:", e)
+        return "Payment processing failed", 500
 
 @app.route('/confirmation')
 def confirmation():
     booking_id = request.args.get('booking_id')
-    if not booking_id:
-        abort(400, description="Booking ID is required")
-    
     try:
         response = bookings_table.get_item(Key={'booking_id': booking_id})
         booking = response.get('Item')
         if not booking:
-            abort(404, description="Booking not found")
-        return render_template('confirmation.html', booking=booking)
+            abort(404)
+        tutor = tutors_data.get(booking['tutor_id'], {})
+        return render_template("confirmation.html", booking=booking, tutor=tutor)
     except Exception as e:
-        print("Confirmation Load Error:", str(e))
-        return f"Confirmation error: {str(e)}"
+        print("Confirmation Error:", e)
+        return "Confirmation page failed", 500
 
-@app.errorhandler(404)
-def not_found_error(error):
-    return render_template('404.html'), 404
+@app.route('/api/student-data')
+def student_data():
+    student_email = request.args.get('student_email')
+    try:
+        all_bookings = bookings_table.scan().get("Items", [])
+        all_payments = payments_table.scan().get("Items", [])
 
-@app.errorhandler(500)
-def internal_error(error):
-    return render_template('500.html'), 500
+        student_bookings = []
+        student_payments = []
+        notifications = []
+
+        for b in all_bookings:
+            if b.get("status") == "confirmed":
+                tutor = tutors_data.get(b["tutor_id"], {})
+                student_bookings.append({
+                    "id": b["booking_id"],
+                    "tutor_name": tutor.get("name", "Unknown"),
+                    "subject": b["subject"],
+                    "date": b["date"],
+                    "time": b["time"],
+                    "status": b["status"],
+                    "total_price": str(b["total_price"]),
+                    "session_format": b["session_format"],
+                    "created_at": b["created_at"]
+                })
+                notifications.append({
+                    "type": "success",
+                    "title": "Session Confirmed",
+                    "message": f"Your session with {tutor.get('name', 'Tutor')} is confirmed.",
+                    "date": datetime.now().strftime("%Y-%m-%d")
+                })
+
+        for p in all_payments:
+            student_payments.append({
+                "id": p["payment_id"],
+                "amount": str(p["amount"]),
+                "status": p["status"],
+                "method": p["payment_method"],
+                "date": p["created_at"]
+            })
+
+        return jsonify({
+            "bookings": student_bookings,
+            "payments": student_payments,
+            "notifications": notifications
+        })
+
+    except Exception as e:
+        print("Student Data Error:", e)
+        return jsonify({"error": "Unable to load student data"}), 500
+
+@app.route('/logout')
+def logout():
+    return redirect(url_for("homepage"))
+
+@app.route('/health')
+def health():
+    return jsonify({"status": "healthy", "tutors_count": len(tutors_data)})
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    app.run(host='0.0.0.0', port=5000)
