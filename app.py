@@ -98,6 +98,7 @@ def book_session(tutor_id):
 
     if request.method == 'POST':
         try:
+            session_format = request.form.get('session_format', 'Online')
             booking_id = str(uuid.uuid4())
             start_time = datetime.now() + timedelta(days=1)
             end_time = start_time + timedelta(hours=1)
@@ -110,14 +111,10 @@ def book_session(tutor_id):
                 'start_time': start_time.isoformat(),
                 'end_time': end_time.isoformat(),
                 'total_price': str(total_price),
-                'tutor_name': tutor['name']
+                'session_format': session_format,
+                'tutor_name': tutor['name'],
+                'status': 'pending_payment'
             })
-
-            sns.publish(
-                TopicArn=SNS_TOPIC_ARN,
-                Subject="Upcoming Tutor Session",
-                Message=f"Hi {session['user']['name']}, your session with {tutor['name']} is scheduled at {start_time.strftime('%Y-%m-%d %H:%M')}."
-            )
 
             return redirect(url_for('payment', booking_id=booking_id))
         except Exception as e:
@@ -160,11 +157,19 @@ def process_payment():
 
         booking = bookings_table.get_item(Key={'booking_id': booking_id}).get('Item')
         tutor_name = booking.get('tutor_name', 'your tutor')
+        session_format = booking.get('session_format', 'Online')
+
+        bookings_table.update_item(
+            Key={'booking_id': booking_id},
+            UpdateExpression="SET #s = :s, payment_id = :p",
+            ExpressionAttributeNames={'#s': 'status'},
+            ExpressionAttributeValues={':s': 'confirmed', ':p': payment_id}
+        )
 
         sns.publish(
             TopicArn=SNS_TOPIC_ARN,
-            Subject="Payment Confirmation",
-            Message=f"Payment successful for your session with {tutor_name}. Booking ID: {booking_id}"
+            Subject="Session Confirmation",
+            Message=f"Payment successful for your {session_format} session with {tutor_name}. Booking ID: {booking_id}"
         )
 
         return render_template("confirmation.html", booking_id=booking_id)
@@ -181,6 +186,19 @@ def student_data():
     except Exception as e:
         print("Student Data Load Error:", str(e))
         return jsonify([])
+
+@app.route('/confirmation')
+def confirmation():
+    booking_id = request.args.get('booking_id')
+    try:
+        response = bookings_table.get_item(Key={'booking_id': booking_id})
+        booking = response.get('Item')
+        if not booking:
+            abort(404)
+        return render_template('confirmation.html', booking=booking)
+    except Exception as e:
+        print("Confirmation Load Error:", str(e))
+        return "Confirmation error"
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
