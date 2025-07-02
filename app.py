@@ -1,10 +1,11 @@
-from flask import Flask, request, redirect, url_for, jsonify
-from datetime import datetime
+from flask import Flask, request, render_template_string, redirect, url_for, jsonify, abort
+from datetime import datetime, timedelta
 import boto3
 import uuid
+import os
 
 app = Flask(__name__)
-app.secret_key = 'your-secret-key-here'
+app.secret_key = 'your-secret-key-here'  # Change in production
 
 # AWS Configuration
 region_name = 'ap-south-1'
@@ -32,11 +33,14 @@ def homepage():
 @app.route('/register', methods=['GET', 'POST'])
 def register():
     if request.method == 'POST':
+        email = request.form['email']
+        password = request.form['password']
+        name = request.form['name']
         try:
             tables['users'].put_item(Item={
-                'email': request.form['email'],
-                'password': request.form['password'],
-                'name': request.form['name'],
+                'email': email,
+                'password': password,
+                'name': name,
                 'role': 'student'
             })
             return redirect(url_for('login'))
@@ -52,14 +56,15 @@ def register():
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
+        email = request.form['email']
+        password = request.form['password']
         try:
-            email = request.form['email']
-            password = request.form['password']
             response = tables['users'].get_item(Key={'email': email})
             user = response.get('Item')
             if user and user['password'] == password:
                 return redirect(url_for('dashboard', email=email))
-            return 'Invalid credentials', 401
+            else:
+                return 'Invalid credentials', 401
         except Exception as e:
             return str(e), 500
     return '''<form method="post">
@@ -81,10 +86,10 @@ def tutor_search():
         html = '<h2>Available Tutors</h2>'
         for tutor in tutors:
             html += f'''<div>
-                          <h3>{tutor['name']}</h3>
-                          Subjects: {', '.join(tutor.get('subjects', []))}<br>
-                          <a href="/tutor/{tutor['tutor_id']}">View Profile</a>
-                        </div>'''
+                        <h3>{tutor['name']}</h3>
+                        Subjects: {', '.join(tutor.get('subjects', []))}<br>
+                        <a href="/tutor/{tutor['tutor_id']}">View Profile</a>
+                      </div>'''
         return html
     except Exception as e:
         return str(e), 500
@@ -98,34 +103,41 @@ def tutor_profile(tutor_id):
             return 'Tutor not found', 404
 
         if request.method == 'POST':
+            date = request.form['date']
+            time = request.form['time']
+            subject = request.form['subject']
+            email = request.form['email']  # Get student email
             booking_id = str(uuid.uuid4())
             rate = int(tutor.get('rate', 25))
             booking_item = {
                 'booking_id': booking_id,
                 'tutor_id': tutor_id,
-                'student_email': request.form['email'],
-                'date': request.form['date'],
-                'time': request.form['time'],
-                'subject': request.form['subject'],
+                'student_email': email,
+                'date': date,
+                'time': time,
+                'subject': subject,
                 'status': 'pending_payment',
                 'total_price': rate,
                 'created_at': datetime.now().isoformat()
             }
             tables['bookings'].put_item(Item=booking_item)
-            notify_upcoming_session(booking_item['student_email'], tutor['name'], booking_item['subject'], booking_item['date'], booking_item['time'], rate)
+
+            # Send notification
+            notify_upcoming_session(email, tutor['name'], subject, date, time, rate)
+
             return redirect(url_for('payment', booking_id=booking_id))
 
         return f'''<h2>{tutor['name']}</h2>
-                   Subjects: {', '.join(tutor.get('subjects', []))}<br>
-                   <form method="post">
-                       Email: <input name="email" required><br>
-                       Date: <input type="date" name="date"><br>
-                       Time: <input type="time" name="time"><br>
-                       Subject: <select name="subject">
-                           {''.join([f'<option value="{s}">{s}</option>' for s in tutor.get('subjects', [])])}
-                       </select><br>
-                       <button type="submit">Book</button>
-                   </form>'''
+                  Subjects: {', '.join(tutor.get('subjects', []))}<br>
+                  <form method="post">
+                    Email: <input name="email" required><br>
+                    Date: <input type="date" name="date"><br>
+                    Time: <input type="time" name="time"><br>
+                    Subject: <select name="subject">
+                        {''.join([f'<option value="{s}">{s}</option>' for s in tutor.get('subjects', [])])}
+                    </select><br>
+                    <button type="submit">Book</button>
+                  </form>'''
     except Exception as e:
         return str(e), 500
 
@@ -133,30 +145,31 @@ def tutor_profile(tutor_id):
 def payment():
     booking_id = request.args.get('booking_id')
     try:
-        booking = tables['bookings'].get_item(Key={'booking_id': booking_id}).get('Item')
+        response = tables['bookings'].get_item(Key={'booking_id': booking_id})
+        booking = response.get('Item')
         if not booking:
             return 'Booking not found', 404
         return f'''<h2>Payment for Booking {booking_id}</h2>
-                   Amount: ${booking['total_price']}<br>
-                   <form method="post" action="/process-payment">
-                       <input type="hidden" name="booking_id" value="{booking_id}">
-                       Payment Method: <input name="payment_method"><br>
-                       Email: <input name="email"><br>
-                       Phone: <input name="phone"><br>
-                       <button type="submit">Pay</button>
-                   </form>'''
+                  Amount: ${booking['total_price']}<br>
+                  <form method="post" action="/process-payment">
+                    <input type="hidden" name="booking_id" value="{booking_id}">
+                    Payment Method: <input name="payment_method"><br>
+                    Email: <input name="email"><br>
+                    Phone: <input name="phone"><br>
+                    <button type="submit">Pay</button>
+                  </form>'''
     except Exception as e:
         return str(e), 500
 
 @app.route('/process-payment', methods=['POST'])
 def process_payment():
+    booking_id = request.form['booking_id']
+    email = request.form['email']
+    phone = request.form['phone']
+    method = request.form['payment_method']
+    payment_id = str(uuid.uuid4())
     try:
-        booking_id = request.form['booking_id']
-        email = request.form['email']
-        phone = request.form['phone']
-        method = request.form['payment_method']
-        payment_id = str(uuid.uuid4())
-
+        # Update booking
         tables['bookings'].update_item(
             Key={'booking_id': booking_id},
             UpdateExpression="set #st=:s",
@@ -164,7 +177,9 @@ def process_payment():
             ExpressionAttributeValues={":s": "confirmed"}
         )
 
-        booking = tables['bookings'].get_item(Key={'booking_id': booking_id})['Item']
+        # Record payment
+        response = tables['bookings'].get_item(Key={'booking_id': booking_id})
+        booking = response['Item']
         tables['payments'].put_item(Item={
             'payment_id': payment_id,
             'booking_id': booking_id,
@@ -197,7 +212,10 @@ def notify_upcoming_session(email, tutor_name, subject, date, time, price):
             Message=message,
             Subject="Upcoming Tutor Session Notification",
             MessageAttributes={
-                'email': {'DataType': 'String', 'StringValue': email}
+                'email': {
+                    'DataType': 'String',
+                    'StringValue': email
+                }
             }
         )
     except Exception as e:
