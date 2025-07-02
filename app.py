@@ -4,6 +4,7 @@ import boto3
 import json
 import uuid
 import os
+from decimal import Decimal
 from botocore.exceptions import ClientError
 
 app = Flask(__name__)
@@ -23,6 +24,16 @@ bookings_table = dynamodb.Table('Bookings')
 payments_table = dynamodb.Table('Payments')
 sessions_table = dynamodb.Table('Sessions')
 tutors_table = dynamodb.Table('Tutors')
+
+def convert_floats_to_decimal(obj):
+    """Convert float values to Decimal for DynamoDB compatibility"""
+    if isinstance(obj, dict):
+        return {k: convert_floats_to_decimal(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_floats_to_decimal(item) for item in obj]
+    elif isinstance(obj, float):
+        return Decimal(str(obj))
+    return obj
 
 def initialize_tutors():
     """Initialize default tutors in DynamoDB if they don't exist"""
@@ -49,14 +60,18 @@ def initialize_tutors():
     
     for tutor_id, tutor_data in default_tutors.items():
         try:
+            # Convert floats to Decimal for DynamoDB
+            tutor_data_decimal = convert_floats_to_decimal(tutor_data)
             tutors_table.put_item(
-                Item=tutor_data,
+                Item=tutor_data_decimal,
                 ConditionExpression='attribute_not_exists(tutor_id)'
             )
             print(f"Added tutor: {tutor_id}")
         except ClientError as e:
             if e.response['Error']['Code'] != 'ConditionalCheckFailedException':
                 print(f"Error adding tutor {tutor_id}: {e}")
+            else:
+                print(f"Tutor {tutor_id} already exists")
 
 def get_all_tutors():
     """Get all tutors from DynamoDB"""
@@ -64,7 +79,9 @@ def get_all_tutors():
         response = tutors_table.scan()
         tutors = {}
         for item in response['Items']:
-            tutors[item['tutor_id']] = item
+            # Convert Decimal back to float for JSON serialization
+            item_converted = json.loads(json.dumps(item, default=str))
+            tutors[item['tutor_id']] = item_converted
         return tutors
     except ClientError as e:
         print(f"Error getting tutors: {e}")
@@ -74,7 +91,11 @@ def get_tutor(tutor_id):
     """Get a specific tutor from DynamoDB"""
     try:
         response = tutors_table.get_item(Key={'tutor_id': tutor_id})
-        return response.get('Item')
+        item = response.get('Item')
+        if item:
+            # Convert Decimal back to float for JSON serialization
+            return json.loads(json.dumps(item, default=str))
+        return None
     except ClientError as e:
         print(f"Error getting tutor {tutor_id}: {e}")
         return None
@@ -107,7 +128,9 @@ def create_user(email, password, name):
 def create_booking(booking_data):
     """Create a booking in DynamoDB"""
     try:
-        bookings_table.put_item(Item=booking_data)
+        # Convert floats to Decimal for DynamoDB
+        booking_data_decimal = convert_floats_to_decimal(booking_data)
+        bookings_table.put_item(Item=booking_data_decimal)
         return True
     except ClientError as e:
         print(f"Error creating booking: {e}")
@@ -117,7 +140,11 @@ def get_booking(booking_id):
     """Get booking from DynamoDB"""
     try:
         response = bookings_table.get_item(Key={'booking_id': booking_id})
-        return response.get('Item')
+        item = response.get('Item')
+        if item:
+            # Convert Decimal back to regular numbers for JSON serialization
+            return json.loads(json.dumps(item, default=str))
+        return None
     except ClientError as e:
         print(f"Error getting booking {booking_id}: {e}")
         return None
@@ -147,7 +174,9 @@ def update_booking_status(booking_id, status, payment_id=None):
 def create_payment(payment_data):
     """Create a payment record in DynamoDB"""
     try:
-        payments_table.put_item(Item=payment_data)
+        # Convert floats to Decimal for DynamoDB
+        payment_data_decimal = convert_floats_to_decimal(payment_data)
+        payments_table.put_item(Item=payment_data_decimal)
         return True
     except ClientError as e:
         print(f"Error creating payment: {e}")
@@ -160,7 +189,9 @@ def get_user_bookings(user_email):
             FilterExpression='attribute_exists(user_email) AND user_email = :email',
             ExpressionAttributeValues={':email': user_email}
         )
-        return response.get('Items', [])
+        items = response.get('Items', [])
+        # Convert Decimal back to regular numbers for JSON serialization
+        return [json.loads(json.dumps(item, default=str)) for item in items]
     except ClientError as e:
         print(f"Error getting user bookings: {e}")
         return []
@@ -172,7 +203,9 @@ def get_user_payments(user_email):
             FilterExpression='attribute_exists(user_email) AND user_email = :email',
             ExpressionAttributeValues={':email': user_email}
         )
-        return response.get('Items', [])
+        items = response.get('Items', [])
+        # Convert Decimal back to regular numbers for JSON serialization
+        return [json.loads(json.dumps(item, default=str)) for item in items]
     except ClientError as e:
         print(f"Error getting user payments: {e}")
         return []
