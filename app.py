@@ -222,4 +222,4 @@ def notify_upcoming_session(email, tutor_name, subject, date, time, price):
         print("SNS Error:", e)
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8000, debug=True)
+    app.run(host='0.0.0.0', port=5000, debug=True)
