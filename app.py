@@ -1,51 +1,36 @@
-# AWS-Compatible Flask App with DynamoDB and SNS Integration
-
 from flask import Flask, render_template, request, redirect, url_for, jsonify, abort
 from datetime import datetime
-import os, uuid, boto3
+import os, json, uuid
 
 app = Flask(__name__)
 app.secret_key = 'your-secret-key'
 
-# AWS clients
-region = 'ap-south-1'
-dynamodb = boto3.resource('dynamodb', region_name=region)
-sns = boto3.client('sns', region_name=region)
-sns_topic_arn = 'arn:aws:sns:ap-south-1:686255965861:TutorMatchNotifications'
+# Load tutor data from JSON
+TUTORS_FILE = os.path.join("templates", "tutors_data.json")
+if os.path.exists(TUTORS_FILE):
+    with open(TUTORS_FILE) as f:
+        tutors_data = json.load(f)
+else:
+    tutors_data = {}  # Empty fallback
 
-# DynamoDB tables
-tables = {
-    'users': dynamodb.Table('Users'),
-    'tutors': dynamodb.Table('Tutors'),
-    'bookings': dynamodb.Table('Bookings'),
-    'payments': dynamodb.Table('Payments'),
-    'sessions': dynamodb.Table('Sessions')
-}
+# In-memory storage
+users = {}
+bookings = {}
+payments = {}
 
 @app.route('/')
 def homepage():
-    return """
-    <h1>Welcome to TutorMatch</h1>
-    <a href='/login'>Login</a> | <a href='/register'>Register</a>
-    """
+    return render_template("homepage.html")
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
         email = request.form['email']
         password = request.form['password']
-        user = tables['users'].get_item(Key={'email': email}).get('Item')
-        if user and user['password'] == password:
+        if email in users and users[email]['password'] == password:
             return redirect(url_for('student_dashboard'))
         return "Invalid credentials", 401
-    return '''
-        <h1>Login</h1>
-        <form method="post">
-        Email: <input name="email"><br>
-        Password: <input name="password"><br>
-        <button type="submit">Login</button>
-        </form>
-    '''
+    return render_template('login.html')
 
 @app.route('/register', methods=['GET', 'POST'])
 def register():
@@ -53,44 +38,31 @@ def register():
         email = request.form['email']
         password = request.form['password']
         name = request.form['name']
-        existing = tables['users'].get_item(Key={'email': email}).get('Item')
-        if existing:
+        if email in users:
             return "User already exists", 400
-        tables['users'].put_item(Item={'email': email, 'password': password, 'name': name})
+        users[email] = {"email": email, "password": password, "name": name}
         return redirect(url_for('login'))
-    return '''
-        <h1>Register</h1>
-        <form method="post">
-        Name: <input name="name"><br>
-        Email: <input name="email"><br>
-        Password: <input name="password"><br>
-        <button type="submit">Register</button>
-        </form>
-    '''
+    return render_template('register.html')
 
 @app.route('/student-dashboard')
 def student_dashboard():
-    return '''
-    <h1>Student Dashboard</h1>
-    <a href="/tutor-search">Search Tutors</a>
-    '''
+    return render_template("student_dashboard.html")
 
 @app.route('/tutor-search')
 def tutor_search():
-    tutors = tables['tutors'].scan().get('Items', [])
-    html = ''.join([f"<h3>{t['name']}</h3><a href='/tutor-profile/{t['tutor_id']}'>View Profile</a><hr>" for t in tutors])
-    return f"<h1>Find Tutors</h1>{html}"
+    tutors_with_id = [{"id": tid, **info} for tid, info in tutors_data.items()]
+    return render_template("tutor_search.html", tutors_with_id=tutors_with_id)
 
 @app.route('/tutor-profile/<tutor_id>')
 def tutor_profile(tutor_id):
-    tutor = tables['tutors'].get_item(Key={'tutor_id': tutor_id}).get('Item')
+    tutor = tutors_data.get(tutor_id)
     if not tutor:
         abort(404)
-    return f"<h1>{tutor['name']}</h1><a href='/book-session/{tutor_id}'>Book Session</a>"
+    return render_template("tutor_profile.html", tutor=tutor, tutor_id=tutor_id)
 
 @app.route('/book-session/<tutor_id>', methods=['GET', 'POST'])
 def book_session(tutor_id):
-    tutor = tables['tutors'].get_item(Key={'tutor_id': tutor_id}).get('Item')
+    tutor = tutors_data.get(tutor_id)
     if not tutor:
         abort(404)
 
@@ -105,34 +77,25 @@ def book_session(tutor_id):
         learning_goals = request.form.get('learning_goals', '')
         session_format = request.form.get('session_format', 'Online Video Call')
 
-        tables['bookings'].put_item(Item={
-            "booking_id": booking_id, "tutor_id": tutor_id,
+        bookings[booking_id] = {
+            "id": booking_id, "tutor_id": tutor_id, "tutor_data": tutor,
             "date": date, "time": time, "subject": subject,
             "session_type": session_type, "sessions_count": sessions_count,
             "total_price": total_price, "learning_goals": learning_goals,
             "session_format": session_format, "status": "pending_payment",
             "created_at": datetime.now().isoformat()
-        })
+        }
         return redirect(url_for("payment", booking_id=booking_id))
 
-    return f"<h1>Book Session with {tutor['name']}</h1>"
+    return render_template("booksession.html", tutor=tutor, tutor_id=tutor_id)
 
 @app.route('/payment')
 def payment():
     booking_id = request.args.get('booking_id')
-    booking = tables['bookings'].get_item(Key={'booking_id': booking_id}).get('Item')
+    booking = bookings.get(booking_id)
     if not booking:
         abort(404)
-    return f"""
-        <h1>Pay ${booking['total_price']}</h1>
-        <form method='post' action='/process-payment'>
-        <input name='booking_id' value='{booking_id}' hidden>
-        Email: <input name='email'><br>
-        Phone: <input name='phone'><br>
-        Payment Method: <input name='payment_method'><br>
-        <button>Pay</button>
-        </form>
-    """
+    return render_template("payment.html", booking=booking, booking_id=booking_id)
 
 @app.route('/process-payment', methods=['POST'])
 def process_payment():
@@ -140,42 +103,69 @@ def process_payment():
     payment_method = request.form['payment_method']
     email = request.form['email']
     phone = request.form['phone']
-    booking = tables['bookings'].get_item(Key={'booking_id': booking_id}).get('Item')
-    if not booking:
+    if booking_id not in bookings:
         abort(404)
     payment_id = str(uuid.uuid4())
-    tables['payments'].put_item(Item={
-        "payment_id": payment_id,
+    payments[payment_id] = {
+        "id": payment_id,
         "booking_id": booking_id,
-        "amount": booking['total_price'],
+        "amount": bookings[booking_id]["total_price"],
         "payment_method": payment_method,
         "status": "completed",
         "created_at": datetime.now().isoformat()
-    })
-    tables['bookings'].update_item(
-        Key={'booking_id': booking_id},
-        UpdateExpression="SET #s = :s, payment_id = :pid",
-        ExpressionAttributeNames={"#s": "status"},
-        ExpressionAttributeValues={":s": "confirmed", ":pid": payment_id}
-    )
-    sns.publish(
-        TopicArn=sns_topic_arn,
-        Message=f"Your session with tutor {booking['tutor_id']} is confirmed.",
-        Subject="TutorMatch: Session Confirmed"
-    )
+    }
+    bookings[booking_id]["status"] = "confirmed"
+    bookings[booking_id]["payment_id"] = payment_id
     return redirect(url_for('confirmation', booking_id=booking_id))
 
 @app.route('/confirmation')
 def confirmation():
     booking_id = request.args.get('booking_id')
-    booking = tables['bookings'].get_item(Key={'booking_id': booking_id}).get('Item')
+    booking = bookings.get(booking_id)
     if not booking:
         abort(404)
-    return f"<h1>Booking Confirmed</h1><p>Session with tutor {booking['tutor_id']} confirmed.</p>"
+    return render_template("confirmation.html", booking=booking)
+
+@app.route('/api/student-data')
+def student_data():
+    student_bookings = []
+    student_payments = []
+    notifications = []
+
+    for b in bookings.values():
+        student_bookings.append({
+            "id": b["id"], "tutor_name": b["tutor_data"]["name"], "subject": b["subject"],
+            "date": b["date"], "time": b["time"], "status": b["status"],
+            "total_price": b["total_price"], "session_format": b["session_format"],
+            "created_at": b["created_at"]
+        })
+        if "payment_id" in b and b["payment_id"] in payments:
+            p = payments[b["payment_id"]]
+            student_payments.append({
+                "id": p["id"], "amount": p["amount"],
+                "status": p["status"], "method": p["payment_method"],
+                "date": p["created_at"]
+            })
+        if b["status"] == "confirmed":
+            notifications.append({
+                "type": "success", "title": "Session Confirmed",
+                "message": f"Your session with {b['tutor_data']['name']} is confirmed.",
+                "date": datetime.now().strftime("%Y-%m-%d")
+            })
+
+    return jsonify({
+        "bookings": student_bookings,
+        "payments": student_payments,
+        "notifications": notifications
+    })
+
+@app.route('/logout')
+def logout():
+    return redirect(url_for("homepage"))
 
 @app.route('/health')
 def health():
-    return jsonify({"status": "healthy"})
+    return jsonify({"status": "healthy", "tutors_count": len(tutors_data)})
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
