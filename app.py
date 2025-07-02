@@ -10,7 +10,7 @@ app = Flask(__name__)
 app.secret_key = 'your-secret-key'
 
 # AWS config
-dynamodb = boto3.resource('dynamodb', region_name='us-east-1')
+dynamodb = boto3.resource('dynamodb', region_name='ap-south-1')
 sns = boto3.client('sns', region_name='ap-south-1')
 sns_topic_arn = 'arn:aws:sns:ap-south-1:686255965861:TutorMatchNotifications'
 
