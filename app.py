@@ -11,26 +11,22 @@ app.secret_key = 'your-secret-key'
 # AWS Region (Mumbai)
 region = 'ap-south-1'
 
-# AWS Clients
+# AWS clients
 dynamodb = boto3.resource('dynamodb', region_name=region)
 sns = boto3.client('sns', region_name=region)
-
-# SNS Topic
 sns_topic_arn = 'arn:aws:sns:ap-south-1:686255965861:TutorMatchNotifications'
 
 # DynamoDB Tables
 users_table = dynamodb.Table('Users')
 bookings_table = dynamodb.Table('Bookings')
 payments_table = dynamodb.Table('Payments')
-tutors_table = dynamodb.Table('Tutors')
 
-# Local fallback tutor data
+# Tutor data from JSON
 TUTORS_FILE = os.path.join("templates", "tutors_data.json")
+tutors_data = {}
 if os.path.exists(TUTORS_FILE):
     with open(TUTORS_FILE) as f:
         tutors_data = json.load(f)
-else:
-    tutors_data = {}
 
 @app.route('/')
 def homepage():
@@ -65,8 +61,8 @@ def register():
             })
             return redirect(url_for('login'))
         except Exception as e:
-            print("DynamoDB Register Error:", e)
-            return f"Internal Server Error: {e}", 500
+            print("Register error:", e)
+            return "Internal Server Error", 500
     return render_template('register.html')
 
 @app.route('/student-dashboard')
@@ -75,26 +71,19 @@ def student_dashboard():
 
 @app.route('/tutor-search')
 def tutor_search():
-    try:
-        response = tutors_table.scan()
-        tutors = response.get('Items', [])
-    except:
-        tutors = [{"id": k, **v} for k, v in tutors_data.items()]
-    return render_template("tutor_search.html", tutors_with_id=tutors)
+    tutors_list = [{"id": k, **v} for k, v in tutors_data.items()]
+    return render_template("tutor_search.html", tutors_with_id=tutors_list)
 
 @app.route('/tutor-profile/<tutor_id>')
 def tutor_profile(tutor_id):
-    try:
-        tutor = tutors_table.get_item(Key={'tutor_id': tutor_id}).get('Item')
-    except:
-        tutor = tutors_data.get(tutor_id)
+    tutor = tutors_data.get(tutor_id)
     if not tutor:
         abort(404)
     return render_template("tutor_profile.html", tutor=tutor, tutor_id=tutor_id)
 
 @app.route('/book-session/<tutor_id>', methods=['GET', 'POST'])
 def book_session(tutor_id):
-    tutor = tutors_table.get_item(Key={'tutor_id': tutor_id}).get('Item')
+    tutor = tutors_data.get(tutor_id)
     if not tutor:
         abort(404)
 
@@ -158,14 +147,16 @@ def process_payment():
 
         payments_table.put_item(Item=payment)
 
+        # Update booking status
         booking['status'] = "confirmed"
         booking['payment_id'] = payment_id
         bookings_table.put_item(Item=booking)
 
+        # Notify via SNS
         sns.publish(
             TopicArn=sns_topic_arn,
-            Message=f"Your session with Tutor {booking['tutor_id']} is confirmed for {booking['date']} at {booking['time']}.",
-            Subject="TutorMatch Session Confirmed"
+            Message=f"Your session with Tutor {booking['tutor_id']} is confirmed on {booking['date']} at {booking['time']}.",
+            Subject="TutorMatch Booking Confirmed"
         )
 
         return redirect(url_for('confirmation', booking_id=booking_id))
@@ -212,11 +203,10 @@ def logout():
 
 @app.route('/health')
 def health():
-    try:
-        count = tutors_table.scan(Select='COUNT').get('Count', 0)
-        return jsonify({"status": "healthy", "tutors_count": count})
-    except:
-        return jsonify({"status": "error", "tutors_count": -1})
+    return jsonify({
+        "status": "healthy",
+        "tutors_count": len(tutors_data)
+    })
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
