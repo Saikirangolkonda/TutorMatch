@@ -184,6 +184,18 @@ def confirmation():
         abort(404)
     return render_template('confirmation.html', booking=booking)
 
+@app.route('/api/student-data')
+def api_student_data():
+    student_email = request.args.get('student_email')
+    if not student_email:
+        return jsonify({'error': 'Missing student_email'}), 400
+
+    user = users_table.get_item(Key={'email': student_email}).get('Item')
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+
+    return jsonify({'user': user})
+
 @app.route('/logout')
 def logout():
     session.clear()
