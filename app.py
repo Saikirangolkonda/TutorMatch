@@ -127,21 +127,19 @@ def book_session(tutor_id):
 @app.route('/payment')
 def payment():
     booking_id = request.args.get('booking_id')
-    # In real app, fetch from DynamoDB
-    return render_template("payment.html", booking={"id": booking_id}, booking_id=booking_id)
 
-@app.route('/process-payment', methods=['POST'])
-def process_payment():
-    booking_id = request.form['booking_id']
-    payment_method = request.form['payment_method']
-    email = request.form['email']
-    phone = request.form['phone']
-
+    # ✅ Fetch full booking object from DynamoDB
     try:
-        # Fetch booking from DynamoDB
-        booking = bookings_table.get_item(Key={'booking_id': booking_id})['Item']
-    except:
-        abort(404)
+        response = bookings_table.get_item(Key={'booking_id': booking_id})
+        booking = response.get('Item')
+        if not booking:
+            abort(404)
+    except Exception as e:
+        print(f"❌ Error fetching booking: {e}")
+        abort(500)
+
+    return render_template("payment.html", booking=booking, booking_id=booking_id)
+
 
     payment_id = str(uuid.uuid4())
     payments_table.put_item(Item={
