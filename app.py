@@ -1,13 +1,21 @@
 from flask import Flask, render_template, request, redirect, url_for, jsonify, abort
-from datetime import datetime, timedelta
-import os, json, uuid
-import boto3
+from datetime import datetime
+import os, json, uuid, boto3
 
-# Flask setup
 app = Flask(__name__)
 app.secret_key = 'your-secret-key'
 
-# Load tutor data from JSON
+# AWS Clients
+dynamodb = boto3.resource('dynamodb', region_name='ap-south-1')
+sns = boto3.client('sns', region_name='ap-south-1')
+sns_topic_arn = 'arn:aws:sns:ap-south-1:686255965861:TutorMatchNotifications'
+
+# DynamoDB Tables
+tutors_table = dynamodb.Table('Tutors')
+bookings_table = dynamodb.Table('Bookings')
+payments_table = dynamodb.Table('Payments')
+
+# Load local tutor data
 TUTORS_FILE = os.path.join("templates", "tutors_data.json")
 if os.path.exists(TUTORS_FILE):
     with open(TUTORS_FILE) as f:
@@ -16,16 +24,9 @@ else:
     tutors_data = {}
     os.makedirs("templates", exist_ok=True)
     with open(TUTORS_FILE, "w") as f:
-        json.dump(tutors_data, f, indent=2)
+        json.dump(tutors_data, f)
 
-# In-memory storage
 users = {}
-bookings = {}
-payments = {}
-
-# AWS setup
-dynamodb = boto3.resource('dynamodb', region_name='ap-south-1')
-tutors_table = dynamodb.Table('Tutors')
 
 @app.route('/')
 def homepage():
@@ -74,7 +75,7 @@ def book_session(tutor_id):
     if not tutor:
         abort(404)
 
-    # Insert tutor into DynamoDB if not exists
+    # ✅ Store tutor data in DynamoDB if not already present
     try:
         response = tutors_table.get_item(Key={'tutor_id': tutor_id})
         if 'Item' not in response:
@@ -87,9 +88,9 @@ def book_session(tutor_id):
                 'bio': tutor['bio'],
                 'availability': tutor['availability']
             })
-            print(f"✅ Tutor {tutor_id} added to DynamoDB.")
+            print(f"✅ Tutor {tutor['name']} stored in DynamoDB.")
     except Exception as e:
-        print(f"⚠️ Error checking/inserting tutor to DynamoDB: {e}")
+        print(f"⚠️ Error storing tutor to DynamoDB: {e}")
 
     if request.method == 'POST':
         booking_id = str(uuid.uuid4())
@@ -102,14 +103,23 @@ def book_session(tutor_id):
         learning_goals = request.form.get('learning_goals', '')
         session_format = request.form.get('session_format', 'Online Video Call')
 
-        bookings[booking_id] = {
-            "id": booking_id, "tutor_id": tutor_id, "tutor_data": tutor,
-            "date": date, "time": time, "subject": subject,
-            "session_type": session_type, "sessions_count": sessions_count,
-            "total_price": total_price, "learning_goals": learning_goals,
-            "session_format": session_format, "status": "pending_payment",
+        # ✅ Save booking in DynamoDB
+        bookings_table.put_item(Item={
+            "booking_id": booking_id,
+            "tutor_id": tutor_id,
+            "tutor_name": tutor["name"],
+            "subject": subject,
+            "date": date,
+            "time": time,
+            "status": "pending_payment",
+            "session_type": session_type,
+            "sessions_count": sessions_count,
+            "total_price": total_price,
+            "learning_goals": learning_goals,
+            "session_format": session_format,
             "created_at": datetime.now().isoformat()
-        }
+        })
+
         return redirect(url_for("payment", booking_id=booking_id))
 
     return render_template("booksession.html", tutor=tutor, tutor_id=tutor_id)
@@ -117,10 +127,8 @@ def book_session(tutor_id):
 @app.route('/payment')
 def payment():
     booking_id = request.args.get('booking_id')
-    booking = bookings.get(booking_id)
-    if not booking:
-        abort(404)
-    return render_template("payment.html", booking=booking, booking_id=booking_id)
+    # In real app, fetch from DynamoDB
+    return render_template("payment.html", booking={"id": booking_id}, booking_id=booking_id)
 
 @app.route('/process-payment', methods=['POST'])
 def process_payment():
@@ -128,64 +136,48 @@ def process_payment():
     payment_method = request.form['payment_method']
     email = request.form['email']
     phone = request.form['phone']
-    if booking_id not in bookings:
+
+    try:
+        # Fetch booking from DynamoDB
+        booking = bookings_table.get_item(Key={'booking_id': booking_id})['Item']
+    except:
         abort(404)
 
     payment_id = str(uuid.uuid4())
-    payments[payment_id] = {
-        "id": payment_id,
+    payments_table.put_item(Item={
+        "payment_id": payment_id,
         "booking_id": booking_id,
-        "amount": bookings[booking_id]["total_price"],
+        "amount": booking["total_price"],
         "payment_method": payment_method,
         "status": "completed",
         "created_at": datetime.now().isoformat()
-    }
+    })
 
-    bookings[booking_id]["status"] = "confirmed"
-    bookings[booking_id]["payment_id"] = payment_id
+    # ✅ Update booking status
+    bookings_table.update_item(
+        Key={'booking_id': booking_id},
+        UpdateExpression="SET #s = :val, payment_id = :pid",
+        ExpressionAttributeNames={'#s': 'status'},
+        ExpressionAttributeValues={':val': 'confirmed', ':pid': payment_id}
+    )
+
+    # ✅ Send email via SNS
+    try:
+        sns.publish(
+            TopicArn=sns_topic_arn,
+            Subject="📚 Session Confirmed",
+            Message=f"Your session with {booking['tutor_name']} on {booking['date']} at {booking['time']} is confirmed."
+        )
+        print("✅ SNS Email Notification Sent")
+    except Exception as e:
+        print(f"⚠️ SNS Error: {e}")
 
     return redirect(url_for('confirmation', booking_id=booking_id))
 
 @app.route('/confirmation')
 def confirmation():
     booking_id = request.args.get('booking_id')
-    booking = bookings.get(booking_id)
-    if not booking:
-        abort(404)
-    return render_template("confirmation.html", booking=booking)
-
-@app.route('/api/student-data')
-def student_data():
-    student_bookings = []
-    student_payments = []
-    notifications = []
-
-    for b in bookings.values():
-        student_bookings.append({
-            "id": b["id"], "tutor_name": b["tutor_data"]["name"], "subject": b["subject"],
-            "date": b["date"], "time": b["time"], "status": b["status"],
-            "total_price": b["total_price"], "session_format": b["session_format"],
-            "created_at": b["created_at"]
-        })
-        if "payment_id" in b and b["payment_id"] in payments:
-            p = payments[b["payment_id"]]
-            student_payments.append({
-                "id": p["id"], "amount": p["amount"],
-                "status": p["status"], "method": p["payment_method"],
-                "date": p["created_at"]
-            })
-        if b["status"] == "confirmed":
-            notifications.append({
-                "type": "success", "title": "Session Confirmed",
-                "message": f"Your session with {b['tutor_data']['name']} is confirmed.",
-                "date": datetime.now().strftime("%Y-%m-%d")
-            })
-
-    return jsonify({
-        "bookings": student_bookings,
-        "payments": student_payments,
-        "notifications": notifications
-    })
+    return render_template("confirmation.html", booking={"id": booking_id})
 
 @app.route('/logout')
 def logout():
