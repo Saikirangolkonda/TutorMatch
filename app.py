@@ -110,14 +110,19 @@ def process_payment():
     phone = request.form.get('phone')
     payment_method = request.form.get('payment_method')
 
-    # Optional: Validate required fields
-    if not booking_id or not email or not phone or not payment_method:
-        return "Missing fields", 400
+    # Debug print
+    print("Received Payment Form Data:")
+    print("Booking ID:", booking_id)
+    print("Email:", email)
+    print("Phone:", phone)
+    print("Payment Method:", payment_method)
 
-    # Fetch booking
+    if not booking_id or not email or not phone or not payment_method:
+        return "Missing fields in form submission", 400
+
     booking = bookings.get(booking_id)
     if not booking:
-        abort(404)
+        return "Booking not found", 404
 
     payment_id = str(uuid.uuid4())
     payments[payment_id] = {
@@ -135,6 +140,7 @@ def process_payment():
     booking["payment_id"] = payment_id
 
     return redirect(url_for('confirmation', booking_id=booking_id))
+
 
 
 @app.route('/confirmation')
