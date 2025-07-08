@@ -105,26 +105,37 @@ def payment():
 
 @app.route('/process-payment', methods=['POST'])
 def process_payment():
-    booking_id = request.form['booking_id']
-    if booking_id not in bookings:
+    booking_id = request.form.get('booking_id')
+    email = request.form.get('email')
+    phone = request.form.get('phone')
+    payment_method = request.form.get('payment_method')
+
+    # Optional: Validate required fields
+    if not booking_id or not email or not phone or not payment_method:
+        return "Missing fields", 400
+
+    # Fetch booking
+    booking = bookings.get(booking_id)
+    if not booking:
         abort(404)
 
     payment_id = str(uuid.uuid4())
     payments[payment_id] = {
         "id": payment_id,
         "booking_id": booking_id,
-        "amount": bookings[booking_id]["total_price"],
-        "payment_method": request.form['payment_method'],
-        "email": request.form['email'],
-        "phone": request.form['phone'],
+        "amount": booking["total_price"],
+        "payment_method": payment_method,
+        "email": email,
+        "phone": phone,
         "status": "completed",
         "created_at": datetime.now().isoformat()
     }
 
-    bookings[booking_id]["status"] = "confirmed"
-    bookings[booking_id]["payment_id"] = payment_id
+    booking["status"] = "confirmed"
+    booking["payment_id"] = payment_id
 
-    return redirect(url_for("confirmation", booking_id=booking_id))
+    return redirect(url_for('confirmation', booking_id=booking_id))
+
 
 @app.route('/confirmation')
 def confirmation():
